@@ -44,6 +44,8 @@ data/raw/         cached API responses (git-ignored, never commit)
 
 ## Polymarket API notes
 - Markets: `GET https://gamma-api.polymarket.com/markets` with `closed`, `limit`, `offset`, `order`, `ascending`, `volume_num_min`, `end_date_min`, `end_date_max`.
+- `/markets` refuses `offset` above 2000 (HTTP 422). For full downloads use `GET /markets/keyset` (same filters, `limit` max 100): it returns `{"markets": [...], "next_cursor": "..."}`, pass `next_cursor` back as `after_cursor`; the last page has no `next_cursor`.
+- Markets can resolve before their deadline (e.g. "…by end of 2027?" settled early): `endDate` is the scheduled deadline, `closedTime` is when it actually closed. Use `closedTime` for `close_time`, and measure the 1/7/30-day horizons from it.
 - `outcomes`, `outcomePrices` and `clobTokenIds` are JSON-encoded strings: parse them with `json.loads`. Token order matches outcome order.
 - Price history: `GET https://clob.polymarket.com/prices-history?market=<token_id>&interval=max&fidelity=<minutes>` returns `{"history": [{"t": unix_seconds, "p": price}]}`.
 - Early (2020) markets can show `outcomePrices` of `["0", "0"]`: treat as bad data.
