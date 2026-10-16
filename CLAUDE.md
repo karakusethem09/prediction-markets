@@ -48,9 +48,12 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Markets can resolve before their deadline (e.g. "…by end of 2027?" settled early): `endDate` is the scheduled deadline, `closedTime` is when it actually closed. Use `closedTime` for `close_time`, and measure the 1/7/30-day horizons from it.
 - `outcomes`, `outcomePrices` and `clobTokenIds` are JSON-encoded strings: parse them with `json.loads`. Token order matches outcome order.
 - Price history: `GET https://clob.polymarket.com/prices-history?market=<token_id>&interval=max&fidelity=<minutes>` returns `{"history": [{"t": unix_seconds, "p": price}]}`.
+  - `interval=max` only works with `fidelity=1440` (daily); hourly (`fidelity=60`) needs `startTs`/`endTs` with a window of at most 15 days. We save daily (full history) + hourly (last 15 days before `closedTime`) per market, for the first outcome's token only.
+  - Markets open less than 1 day return an empty daily history; their hourly file has everything. Markets closed before 2023 (pre order book) have no history at all.
+  - Prices can slightly exceed 1 (e.g. 1.005) right before resolution: clip to 0–1 when normalizing, never edit the raw files.
 - Early (2020) markets can show `outcomePrices` of `["0", "0"]`: treat as bad data.
 - A resolved market's final price converges to 0 or 1. Analysis uses prices at fixed horizons (1, 7 and 30 days before close), never the final price.
 
 ## Status
-- Done: `explore.py`, `polymarket.py` (paginated market download with raw cache and retries), `check_markets.py`.
-- Next: confirm the market download works, add tests for it, then build the price-history extractor.
+- Done: `explore.py`, `polymarket.py` (keyset-paginated market download + daily/hourly price histories, raw cache, retries, tests), `check_markets.py`. Data: 11,368 resolved markets with volume ≥ $1M ending from 2020-07-01.
+- Next: transform step (`normalize.py`, `schemas.py`), then snapshots.
