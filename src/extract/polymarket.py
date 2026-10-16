@@ -1,4 +1,4 @@
-"Download resolved Polymarket markets and save the raw API pages to disk."""
+"""Download resolved Polymarket markets and save the raw API pages to disk."""
 
 import json
 import time
@@ -7,12 +7,16 @@ from pathlib import Path
 
 import requests
 
-GAMMA_URL = "https://gamma-api.polymarket.com/markets"
+# The plain /markets endpoint refuses offsets above 2000, so we use the
+# keyset endpoint: each page gives us a cursor that points to the next page.
+GAMMA_URL = "https://gamma-api.polymarket.com/markets/keyset"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = PROJECT_ROOT / "data" / "raw" / "polymarket" / "markets" / date.today().isoformat()
-MIN_VOLUME = 1_000 
+MIN_VOLUME = 1_000_000
+END_DATE_MIN = "2020-07-01T00:00:00Z"  # one month after Polymarket launched (June 2020)
+PAGE_SIZE = 100  # markets per request (the API's maximum)
 
-session = requests.Sessiom()
+session = requests.Session()
 
 def get_with_retry(url, params, max_retries=5):
     for attempt in range(max_retries):
@@ -26,7 +30,10 @@ def get_with_retry(url, params, max_retries=5):
         if response is not None and response.status_code < 500 and response.status_code != 429:
             response.raise_for_status()  #400,404...: our mistake ,retrying wont help
 
-        wait = 2 ** attempt #1, 2, 4, 8, 18 seconds
+        if attempt == max_retries - 1:
+            break  # last attempt failed: no point waiting before giving up
+
+        wait = 2 ** attempt  # 1, 2, 4, 8 seconds
         print(f"    attempt {attempt + 1} failed, waiting {wait}s")
         time.sleep(wait)
 
@@ -35,11 +42,12 @@ def get_with_retry(url, params, max_retries=5):
 
 def fetch_resolved_markets():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    offset = 0
+    page_number = 0
+    cursor = None  # no cursor yet: the first request gets the first page
     total = 0
 
     while True:
-        page_file = RAW_DIR / f"page_{offset:06d}.json"
+        page_file = RAW_DIR / f"page_{page_number:04d}.json"
 
         if page_file.exists():  # already downloaded today: reuse it
             page = json.loads(page_file.read_text())
@@ -47,21 +55,25 @@ def fetch_resolved_markets():
             params = {
                 "closed": "true",
                 "volume_num_min": MIN_VOLUME,
-                "order": "id",
-                "ascending": "true",
+                "end_date_min": END_DATE_MIN,
                 "limit": PAGE_SIZE,
-                "offset": offset,
             }
+            if cursor:
+                params["after_cursor"] = cursor
             page = get_with_retry(GAMMA_URL, params)
             page_file.write_text(json.dumps(page))
             time.sleep(0.2)  # be polite to the API
 
-        total += len(page)
-        print(f"offset {offset}: {len(page)} markets (total {total})")
+        # A page looks like {"markets": [...], "next_cursor": "..."}
+        markets = page["markets"]
+        total += len(markets)
+        print(f"page {page_number}: {len(markets)} markets (total {total})")
 
-        if len(page) < PAGE_SIZE:  # a short page means we reached the end
+        # The saved page includes its next_cursor, so a rerun can continue from the cache
+        cursor = page.get("next_cursor")
+        if not cursor:  # the last page has no next_cursor
             break
-        offset += PAGE_SIZE
+        page_number += 1
 
     return total
 
