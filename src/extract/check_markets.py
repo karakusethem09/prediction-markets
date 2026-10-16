@@ -21,8 +21,8 @@ latest = day_folders[-1]
 pages = sorted(latest.glob("page_*.json"))
 rows = []
 for page in pages:
-    markets_on_page = json.loads(page.read_text())
-    rows.extend(markets_on_page)
+    page_data = json.loads(page.read_text())  # {"markets": [...], "next_cursor": "..."}
+    rows.extend(page_data["markets"])
 
 df = pd.DataFrame(rows)  # one row per market, one column per field
 
