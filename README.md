@@ -1,5 +1,7 @@
 # Are Prediction Markets Calibrated?
 
+**[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself.
+
 Every day, people around the world try to predict the future: who will win an election, whether the central bank will cut rates, which team will win on Sunday. On a prediction market they back those predictions with money by buying and selling contracts that pay $1 if the event happens. The market price reflects the prices at which participants are willing to buy and sell those contracts, so it works as the crowd's combined estimate of the probability. A "Yes" share trading at 70 cents means the market thinks there is a 70% chance it will happen.
 
 A single market is just one guess, and one guess can't be right or wrong about a probability. If something priced at 70% doesn't happen, the market wasn't necessarily wrong, because 30% outcomes happen all the time. So I got curious about a bigger question: **what happens when you add thousands of these markets together?** Of all the things the crowd priced at 70%, did about 70% actually happen? Of everything priced at 10%, did about one in ten come true?
@@ -109,5 +111,5 @@ data/raw/         cached API responses (git-ignored)
 
 - Split the results by topic, to see where the bias in finding 3 comes from.
 - Add [Kalshi](https://kalshi.com) as a second platform. The pipeline is built so that only the extract and normalize steps are platform-specific.
-- Put the dashboard online (Streamlit Community Cloud with a hosted PostgreSQL database).
+- Update the online data automatically every day as new markets resolve.
 - A single `pipeline.py` command that runs every step.
