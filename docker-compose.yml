@@ -1,0 +1,16 @@
+# Local PostgreSQL 16 for development.
+# Start: docker compose up -d     Stop: docker compose down     (the data is kept either way)
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres  # fine for a local-only database; never reuse it online
+      POSTGRES_DB: prediction_markets
+    ports:
+      - "127.0.0.1:5432:5432"  # only this computer can connect, not the network
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # keeps the data when the container is removed
+
+volumes:
+  pgdata:
