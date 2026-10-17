@@ -14,8 +14,10 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 
 ## Commands
 - Activate environment: `source .venv/bin/activate`
-- Download resolved markets: `python src/extract/polymarket.py`
+- Install dependencies and make `src/` packages importable (once): `pip install -r requirements.txt && pip install -e .`
+- Download resolved markets and price histories: `python src/extract/polymarket.py`
 - Check downloaded markets: `python src/extract/check_markets.py`
+- Normalize and validate: `python src/transform/normalize.py`
 - Run tests: `pytest`
 
 ## Target structure
@@ -33,7 +35,8 @@ data/raw/         cached API responses (git-ignored, never commit)
 
 ## Rules
 - Platform-specific code lives only in `src/extract/` and the `normalize_<platform>` functions. Snapshot, analysis and dashboard code must never mention a platform by name.
-- Every platform's normalized output has the same columns: `market_id` (`poly:<id>`), `platform`, `event_id`, `question`, `category`, `close_time`, `outcome` (1 = Yes happened, 0 = No), `volume_usd`. Prices are always 0–1.
+- Every platform's normalized output has the same columns: `market_id` (`poly:<id>`), `platform`, `event_id`, `question`, `category`, `open_time`, `close_time`, `outcome` (1 = the first outcome happened, e.g. Yes; 0 = it didn't), `volume_usd`. Prices are the first outcome's price, always 0–1. `src/transform/schemas.py` enforces this.
+- Keep only markets with a clear, final result, open at least 1 day (shorter markets are easy to manipulate).
 - Build file paths from `PROJECT_ROOT = Path(__file__).resolve().parents[N]`, never relative to the current directory.
 - Save every raw API response under `data/raw/` before transforming it.
 - All HTTP calls go through a retry helper: timeout on every request, exponential backoff on 429/5xx and network errors, no retry on other 4xx.
@@ -56,4 +59,5 @@ data/raw/         cached API responses (git-ignored, never commit)
 
 ## Status
 - Done: `explore.py`, `polymarket.py` (keyset-paginated market download + daily/hourly price histories, raw cache, retries, tests), `check_markets.py`. Data: 11,368 resolved markets with volume ≥ $1M ending from 2020-07-01.
-- Next: transform step (`normalize.py`, `schemas.py`), then snapshots.
+- Done: transform step (`normalize.py`, `schemas.py`, tests): 10,792 markets kept, 3.1M price rows (daily + hourly).
+- Next: snapshots (price at 1, 7 and 30 days before close), then load into Postgres.
