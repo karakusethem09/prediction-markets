@@ -3,6 +3,7 @@
 Upsert = insert new rows, update rows whose key already exists. So rerunning the
 load never creates duplicates: it just brings the database up to date.
 """
+import argparse
 import os
 from pathlib import Path
 
@@ -90,10 +91,20 @@ def run_load(tables, database_url=DATABASE_URL):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--skip-prices", action="store_true",
+        help="load only markets and snapshots (the online database doesn't keep the 3M price rows)",
+    )
+    args = parser.parse_args()
+
     markets, prices = build_normalized_tables(verbose=True)
     snapshots = take_snapshots(markets, prices)
 
-    row_counts = run_load({"markets": markets, "price_history": prices, "snapshots": snapshots})
+    tables = {"markets": markets, "price_history": prices, "snapshots": snapshots}
+    if args.skip_prices:
+        del tables["price_history"]
+    row_counts = run_load(tables)
     print(f"\nLoaded: {row_counts}")
 
     with psycopg.connect(DATABASE_URL) as conn:
