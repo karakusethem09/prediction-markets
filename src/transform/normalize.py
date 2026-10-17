@@ -89,23 +89,30 @@ def drop_short_markets(markets, min_duration=MIN_OPEN_DURATION):
     return markets[open_for >= min_duration].reset_index(drop=True)
 
 
-if __name__ == "__main__":
+def build_normalized_tables(verbose=False):
+    """Normalize every platform's latest raw data and return validated (markets, prices) tables.
+
+    Later steps call this, so they never need to know which platforms exist.
+    """
     latest = sorted(d for d in POLYMARKET_MARKETS_DIR.iterdir() if d.is_dir())[-1]
     raw_markets = load_markets(latest)
-    print(f"Raw markets ({latest.name}): {len(raw_markets)}")
-
     markets = normalize_polymarket_markets(raw_markets)
-    print(f"With a clear final result:  {len(markets)}")
-
+    clear_result_count = len(markets)
     markets = drop_short_markets(markets)
-    print(f"Open at least 1 day:        {len(markets)}")
-
     prices = normalize_polymarket_prices(markets)
-    print(f"Price rows:                 {len(prices):,} "
-          f"({prices['market_id'].nunique()} markets have prices)")
 
-    markets_schema.validate(markets)
-    prices_schema.validate(prices)
+    if verbose:
+        print(f"Raw markets ({latest.name}): {len(raw_markets)}")
+        print(f"With a clear final result:  {clear_result_count}")
+        print(f"Open at least 1 day:        {len(markets)}")
+        print(f"Price rows:                 {len(prices):,} "
+              f"({prices['market_id'].nunique()} markets have prices)")
+
+    return markets_schema.validate(markets), prices_schema.validate(prices)
+
+
+if __name__ == "__main__":
+    markets, prices = build_normalized_tables(verbose=True)
     print("\nBoth tables pass their schemas.")
     print(f"First outcome won in {markets['outcome'].mean():.1%} of markets")
     print(prices.groupby("fidelity")["market_id"].agg(["count", "nunique"]))
