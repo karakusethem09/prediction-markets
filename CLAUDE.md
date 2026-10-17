@@ -24,6 +24,8 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Open a SQL prompt: `docker compose exec postgres psql -U postgres -d prediction_markets`
 - Calibration numbers in the terminal: `python src/analysis/calibration.py`
 - Analysis notebook: open `notebooks/calibration.ipynb` in VS Code with the `.venv` kernel (needs the database running)
+- Online database (Supabase): secrets live in `.env` (git-ignored, never print it): `SUPABASE_URL` (admin, for loading) and `DASHBOARD_DATABASE_URL` (read-only). Use with `set -a; source .env; set +a`, then e.g. `DATABASE_URL="$SUPABASE_URL" python src/load/postgres.py --skip-prices`
+- Lock down Supabase / reset the read-only password: `python src/load/secure_online_database.py` (applies `sql/supabase_security.sql`)
 - Dashboard: `streamlit run app/dashboard.py` (needs the database running; restart it after changing code in `src/`, which Streamlit doesn't reload)
 - Run tests: `pytest`
 

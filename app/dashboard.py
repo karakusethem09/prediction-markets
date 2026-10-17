@@ -6,6 +6,7 @@ Uses only the markets and snapshots tables, so it can later run from a small onl
 database. Platform names come from the data, never from this code.
 """
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from analysis.calibration import (
     calibration_figure, calibration_table, filter_snapshots, load_calibration_data,
@@ -19,7 +20,12 @@ st.set_page_config(page_title="Prediction market calibration", layout="wide")
 
 @st.cache_data(ttl=3600)  # read the database at most once an hour, not on every click
 def get_data():
-    return load_calibration_data()
+    # Online (Streamlit Cloud), the read-only database address is stored as a secret.
+    # On your own computer there's no secrets file, so use the local database.
+    try:
+        return load_calibration_data(st.secrets["DATABASE_URL"])
+    except (StreamlitSecretNotFoundError, KeyError):
+        return load_calibration_data()
 
 
 data = get_data()
