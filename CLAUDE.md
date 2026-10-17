@@ -24,6 +24,7 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Open a SQL prompt: `docker compose exec postgres psql -U postgres -d prediction_markets`
 - Calibration numbers in the terminal: `python src/analysis/calibration.py`
 - Analysis notebook: open `notebooks/calibration.ipynb` in VS Code with the `.venv` kernel (needs the database running)
+- Dashboard: `streamlit run app/dashboard.py` (needs the database running; restart it after changing code in `src/`, which Streamlit doesn't reload)
 - Run tests: `pytest`
 
 ## Target structure
@@ -71,4 +72,5 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Done: load step (`docker-compose.yml`, `sql/schema.sql`, `src/load/postgres.py`, tests). One transaction per run (COPY into a temp table, then upsert), logged in `pipeline_runs`; ~30 s for all tables. Database tests use a throwaway `pytest_load` schema and skip if Postgres isn't running.
 - Database plan: local Docker Postgres for everything; later copy only `markets` + `snapshots` to Supabase for the online dashboard (the price table is too big for its free tier).
 - Done: calibration analysis (`src/analysis/calibration.py` + tests, `notebooks/calibration.ipynb`). Charts are saved with both interactive and PNG outputs so they show on GitHub. Compare horizons only on markets with all three snapshots (`same_markets_only`). Main finding: well calibrated (1–2 points), but prices are slightly too far from 50%.
-- Next: Streamlit dashboard reusing `analysis.calibration` (later: topic split, since Polymarket's `category` is empty).
+- Done: Streamlit dashboard (`app/dashboard.py`, `.streamlit/config.toml`, smoke tests with `AppTest`). Reads only `markets` + `snapshots`; platform names come from the data. "Same markets at every horizon" is on by default so the horizons are compared fairly.
+- Next ideas: README with the findings and chart; deploy the dashboard (copy `markets` + `snapshots` to Supabase, Streamlit Community Cloud); `src/pipeline.py` to run every step with one command; topic split (Polymarket's `category` is empty, so needs another source, e.g. event tags); Kalshi as a second platform.

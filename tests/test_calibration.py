@@ -2,7 +2,9 @@
 import pandas as pd
 import pytest
 
-from analysis.calibration import calibration_table, price_bin, same_markets_only, scores, wilson_interval
+from analysis.calibration import (
+    calibration_table, filter_snapshots, price_bin, same_markets_only, scores, wilson_interval,
+)
 
 
 def snapshots(prices, outcomes, horizon=1, event_ids=None):
@@ -66,3 +68,17 @@ def test_same_markets_only_keeps_markets_with_every_horizon():
         snapshots([0.5], [1], horizon=7),           # only m0
     ])
     assert set(same_markets_only(data)["market_id"]) == {"m0"}
+
+
+def test_filter_snapshots():
+    data = pd.DataFrame({
+        "market_id": ["a", "b", "c"],
+        "platform": ["polymarket", "polymarket", "other"],
+        "volume_usd": [1_000_000.0, 5_000_000.0, 5_000_000.0],
+        "close_time": pd.to_datetime(["2024-06-01", "2025-06-01", "2025-06-01"], utc=True),
+    })
+
+    assert filter_snapshots(data, min_volume=2_000_000)["market_id"].tolist() == ["b", "c"]
+    assert filter_snapshots(data, platforms=["polymarket"])["market_id"].tolist() == ["a", "b"]
+    assert filter_snapshots(data, close_years=(2025, 2025))["market_id"].tolist() == ["b", "c"]
+    assert len(filter_snapshots(data)) == 3  # no filters: keep everything

@@ -27,11 +27,23 @@ def load_calibration_data(database_url=DATABASE_URL):
     # "postgresql+psycopg" tells SQLAlchemy to use the psycopg driver we installed
     engine = create_engine(database_url.replace("postgresql://", "postgresql+psycopg://", 1))
     sql = """
-        SELECT s.market_id, s.horizon_days, s.price, m.outcome, m.event_id, m.volume_usd
+        SELECT s.market_id, s.horizon_days, s.price, m.outcome, m.event_id, m.volume_usd,
+               m.platform, m.close_time
         FROM snapshots s
         JOIN markets m USING (market_id)
     """
     return pd.read_sql(sql, engine)
+
+
+def filter_snapshots(data, platforms=None, min_volume=0, close_years=None):
+    """Keep snapshots of markets on the given platforms, with at least min_volume,
+    that closed within close_years (an inclusive (first, last) pair). None means no filter."""
+    keep = data["volume_usd"] >= min_volume
+    if platforms is not None:
+        keep &= data["platform"].isin(platforms)
+    if close_years is not None:
+        keep &= data["close_time"].dt.year.between(*close_years)
+    return data[keep]
 
 
 def same_markets_only(data):
@@ -143,9 +155,11 @@ def calibration_figure(table):
             showlegend=False,
         ), row=1, col=col)
 
-    # Label the diagonal once, directly, instead of a legend
-    fig.add_annotation(x=0.78, y=0.9, text="Perfect calibration", showarrow=False,
-                       font=dict(color=TEXT_SECONDARY, size=12), textangle=-38, row=1, col=1)
+    # Label the diagonal once, directly, instead of a legend. The text sits in the
+    # bottom-right corner (far below the diagonal), where data points don't go
+    fig.add_annotation(x=0.8, y=0.8, ax=0.86, ay=0.42, axref="x", ayref="y",
+                       text="Perfect calibration", showarrow=True, arrowhead=0, arrowwidth=1,
+                       arrowcolor=MUTED, font=dict(color=TEXT_SECONDARY, size=12), row=1, col=1)
 
     axis = dict(range=[0, 1], tickformat=".0%", dtick=0.2, gridcolor=GRIDLINE, gridwidth=1,
                 zeroline=False, showline=True, linecolor="#c3c2b7", ticks="",

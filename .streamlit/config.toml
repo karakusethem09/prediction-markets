@@ -1,0 +1,6 @@
+# The charts are designed for a light background, so keep the whole app light
+[theme]
+base = "light"
+primaryColor = "#2a78d6"  # the chart's blue, for filters and toggles
+backgroundColor = "#fcfcfb"
+font = "sans-serif"
