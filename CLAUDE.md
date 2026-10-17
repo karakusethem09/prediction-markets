@@ -18,6 +18,7 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Download resolved markets and price histories: `python src/extract/polymarket.py`
 - Check downloaded markets: `python src/extract/check_markets.py`
 - Normalize and validate: `python src/transform/normalize.py`
+- Take snapshots: `python src/transform/snapshots.py`
 - Run tests: `pytest`
 
 ## Target structure
@@ -37,6 +38,7 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Platform-specific code lives only in `src/extract/` and the `normalize_<platform>` functions. Snapshot, analysis and dashboard code must never mention a platform by name.
 - Every platform's normalized output has the same columns: `market_id` (`poly:<id>`), `platform`, `event_id`, `question`, `category`, `open_time`, `close_time`, `outcome` (1 = the first outcome happened, e.g. Yes; 0 = it didn't), `volume_usd`. Prices are the first outcome's price, always 0–1. `src/transform/schemas.py` enforces this.
 - Keep only markets with a clear, final result, open at least 1 day (shorter markets are easy to manipulate).
+- Snapshot rule: for each horizon (1, 7, 30 days), use the latest price at or before `close_time - horizon`, never after, and at most 1 day old; skip the horizon if the market wasn't open yet or no price is fresh enough.
 - Build file paths from `PROJECT_ROOT = Path(__file__).resolve().parents[N]`, never relative to the current directory.
 - Save every raw API response under `data/raw/` before transforming it.
 - All HTTP calls go through a retry helper: timeout on every request, exponential backoff on 429/5xx and network errors, no retry on other 4xx.
@@ -60,4 +62,5 @@ data/raw/         cached API responses (git-ignored, never commit)
 ## Status
 - Done: `explore.py`, `polymarket.py` (keyset-paginated market download + daily/hourly price histories, raw cache, retries, tests), `check_markets.py`. Data: 11,368 resolved markets with volume ≥ $1M ending from 2020-07-01.
 - Done: transform step (`normalize.py`, `schemas.py`, tests): 10,792 markets kept, 3.1M price rows (daily + hourly).
-- Next: snapshots (price at 1, 7 and 30 days before close), then load into Postgres.
+- Done: snapshots (`snapshots.py`, tests): 20,845 snapshots — 1d: 10,720 markets, 7d: 6,624, 30d: 3,501.
+- Next: load markets, prices and snapshots into Postgres (Docker Compose, `sql/schema.sql`, idempotent upserts).

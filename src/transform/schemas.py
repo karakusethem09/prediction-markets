@@ -33,3 +33,21 @@ prices_schema = pa.DataFrameSchema(
     },
     strict=True,
 )
+
+snapshots_schema = pa.DataFrameSchema(
+    {
+        "market_id": pa.Column(str),
+        "horizon_days": pa.Column(int, pa.Check.isin([1, 7, 30])),
+        "target_time": pa.Column(UTC_TIME),  # close_time minus the horizon
+        "price_time": pa.Column(UTC_TIME),  # when the price we used was recorded
+        "price": pa.Column(float, pa.Check.in_range(0, 1)),
+    },
+    checks=[
+        # The core rule: never use a price from after the snapshot moment
+        pa.Check(lambda df: df["price_time"] <= df["target_time"], error="price from the future"),
+        pa.Check(lambda df: df["target_time"] - df["price_time"] <= pd.Timedelta(days=1),
+                 error="price more than 1 day old"),
+    ],
+    unique=["market_id", "horizon_days"],  # one snapshot per market per horizon
+    strict=True,
+)
