@@ -19,6 +19,9 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Check downloaded markets: `python src/extract/check_markets.py`
 - Normalize and validate: `python src/transform/normalize.py`
 - Take snapshots: `python src/transform/snapshots.py`
+- Start / stop the local database: `docker compose up -d` / `docker compose down` (data is kept in a Docker volume)
+- Load everything into Postgres: `python src/load/postgres.py` (uses `DATABASE_URL` if set, else the local Docker database)
+- Open a SQL prompt: `docker compose exec postgres psql -U postgres -d prediction_markets`
 - Run tests: `pytest`
 
 ## Target structure
@@ -63,4 +66,6 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Done: `explore.py`, `polymarket.py` (keyset-paginated market download + daily/hourly price histories, raw cache, retries, tests), `check_markets.py`. Data: 11,368 resolved markets with volume ≥ $1M ending from 2020-07-01.
 - Done: transform step (`normalize.py`, `schemas.py`, tests): 10,792 markets kept, 3.1M price rows (daily + hourly).
 - Done: snapshots (`snapshots.py`, tests): 20,845 snapshots — 1d: 10,720 markets, 7d: 6,624, 30d: 3,501.
-- Next: load markets, prices and snapshots into Postgres (Docker Compose, `sql/schema.sql`, idempotent upserts).
+- Done: load step (`docker-compose.yml`, `sql/schema.sql`, `src/load/postgres.py`, tests). One transaction per run (COPY into a temp table, then upsert), logged in `pipeline_runs`; ~30 s for all tables. Database tests use a throwaway `pytest_load` schema and skip if Postgres isn't running.
+- Database plan: local Docker Postgres for everything; later copy only `markets` + `snapshots` to Supabase for the online dashboard (the price table is too big for its free tier).
+- Next: calibration analysis notebook (group snapshots by price, compare with how often the outcome happened).
