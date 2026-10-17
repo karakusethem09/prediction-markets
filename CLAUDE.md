@@ -22,6 +22,8 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Start / stop the local database: `docker compose up -d` / `docker compose down` (data is kept in a Docker volume)
 - Load everything into Postgres: `python src/load/postgres.py` (uses `DATABASE_URL` if set, else the local Docker database)
 - Open a SQL prompt: `docker compose exec postgres psql -U postgres -d prediction_markets`
+- Calibration numbers in the terminal: `python src/analysis/calibration.py`
+- Analysis notebook: open `notebooks/calibration.ipynb` in VS Code with the `.venv` kernel (needs the database running)
 - Run tests: `pytest`
 
 ## Target structure
@@ -68,4 +70,5 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Done: snapshots (`snapshots.py`, tests): 20,845 snapshots — 1d: 10,720 markets, 7d: 6,624, 30d: 3,501.
 - Done: load step (`docker-compose.yml`, `sql/schema.sql`, `src/load/postgres.py`, tests). One transaction per run (COPY into a temp table, then upsert), logged in `pipeline_runs`; ~30 s for all tables. Database tests use a throwaway `pytest_load` schema and skip if Postgres isn't running.
 - Database plan: local Docker Postgres for everything; later copy only `markets` + `snapshots` to Supabase for the online dashboard (the price table is too big for its free tier).
-- Next: calibration analysis notebook (group snapshots by price, compare with how often the outcome happened).
+- Done: calibration analysis (`src/analysis/calibration.py` + tests, `notebooks/calibration.ipynb`). Charts are saved with both interactive and PNG outputs so they show on GitHub. Compare horizons only on markets with all three snapshots (`same_markets_only`). Main finding: well calibrated (1–2 points), but prices are slightly too far from 50%.
+- Next: Streamlit dashboard reusing `analysis.calibration` (later: topic split, since Polymarket's `category` is empty).
