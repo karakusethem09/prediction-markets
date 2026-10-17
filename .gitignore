@@ -5,3 +5,5 @@ __pycache__/
 .DS_Store
 *.egg-info/
 .ipynb_checkpoints/
+.claude/settings.local.json
+.env
