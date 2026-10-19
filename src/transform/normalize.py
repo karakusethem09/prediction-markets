@@ -4,12 +4,14 @@ Platform-specific code lives only in the normalize_<platform>_* functions;
 drop_short_markets works on any platform's normalized table.
 """
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
+from extract import polymarket
 from extract.polymarket import PRICES_DIR, load_markets
-from transform.schemas import markets_schema, prices_schema
+from transform.schemas import UTC_TIME, markets_schema, prices_schema
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 POLYMARKET_MARKETS_DIR = PROJECT_ROOT / "data" / "raw" / "polymarket" / "markets"
@@ -55,6 +57,10 @@ def normalize_polymarket_markets(raw_markets):
         })
 
     markets = pd.DataFrame(rows)
+    # Declare text columns as text: a column that is all empty (category usually is) would
+    # otherwise get a generic type, and an empty table would then fail its schema check
+    text_columns = ["market_id", "platform", "event_id", "question", "category"]
+    markets[text_columns] = markets[text_columns].astype("str")
     markets["open_time"] = to_utc(markets["open_time"], format="ISO8601")
     markets["close_time"] = to_utc(markets["close_time"], format="ISO8601")
     return markets
@@ -75,6 +81,14 @@ def normalize_polymarket_prices(markets, prices_dir=PRICES_DIR):
                 table["market_id"] = market_id
                 table["fidelity"] = fidelity
                 tables.append(table)
+
+    if not tables:  # e.g. a quiet day with no new markets: an empty table with the right columns
+        return pd.DataFrame({
+            "market_id": pd.Series(dtype=str),
+            "time": pd.Series(dtype=UTC_TIME),
+            "price": pd.Series(dtype=float),
+            "fidelity": pd.Series(dtype=str),
+        })
 
     prices = pd.concat(tables, ignore_index=True)
     prices["time"] = to_utc(prices["t"], unit="s")
@@ -109,6 +123,38 @@ def build_normalized_tables(verbose=False):
               f"({prices['market_id'].nunique()} markets have prices)")
 
     return markets_schema.validate(markets), prices_schema.validate(prices)
+
+
+@dataclass
+class Updates:
+    """What a pipeline run found: new markets and their prices, ready for snapshots and loading."""
+    eligible_markets: int  # all downloaded markets that pass our filters, new or not
+    markets: pd.DataFrame  # only the ones not in the database yet
+    prices: pd.DataFrame  # prices of those new markets
+    failed_downloads: list  # markets whose prices failed to download: retried next run
+
+
+def normalize_polymarket_updates(existing_market_ids):
+    """Download the latest market list, keep eligible markets that aren't in the database yet,
+    and download price history only for those."""
+    polymarket.fetch_resolved_markets()  # the full list is cheap (~1 minute), prices are not
+    raw_markets = load_markets(polymarket.RAW_DIR)
+    markets = drop_short_markets(normalize_polymarket_markets(raw_markets))
+    new = markets[~markets["market_id"].isin(existing_market_ids)]
+
+    new_ids = set(new["market_id"])
+    raw_new = [m for m in raw_markets if f"poly:{m['id']}" in new_ids]
+    failed = polymarket.fetch_all_price_histories(raw_new)
+    # A market whose prices failed isn't loaded, so the next run sees it as new and tries again
+    new = new[~new["market_id"].isin({f"poly:{market_id}" for market_id in failed})].reset_index(drop=True)
+
+    prices = normalize_polymarket_prices(new, prices_dir=polymarket.PRICES_DIR)
+    return Updates(len(markets), new, prices, [f"poly:{m}" for m in failed])
+
+
+def collect_updates(existing_market_ids):
+    """Every platform's new markets and prices. The pipeline calls this, so it never names a platform."""
+    return normalize_polymarket_updates(existing_market_ids)
 
 
 if __name__ == "__main__":

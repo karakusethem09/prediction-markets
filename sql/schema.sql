@@ -39,5 +39,9 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     finished_at  timestamptz,
     status       text NOT NULL CHECK (status IN ('running', 'success', 'failed')),
     row_counts   jsonb,                         -- e.g. {"markets": 10792, ...}
-    error        text
+    error        text,
+    checks       jsonb                          -- data quality check results, one entry per check
 );
+
+-- Databases created before the checks column existed get it here
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS checks jsonb;

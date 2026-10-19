@@ -26,6 +26,8 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Analysis notebook: open `notebooks/calibration.ipynb` in VS Code with the `.venv` kernel (needs the database running)
 - Online database (Supabase): secrets live in `.env` (git-ignored, never print it): `SUPABASE_URL` (admin, for loading) and `DASHBOARD_DATABASE_URL` (read-only). Use with `set -a; source .env; set +a`, then e.g. `DATABASE_URL="$SUPABASE_URL" python src/load/postgres.py --skip-prices`
 - Lock down Supabase / reset the read-only password: `python src/load/secure_online_database.py` (applies `sql/supabase_security.sql`)
+- Daily incremental update (only new markets): `python src/pipeline.py` (local; add `--with-prices` to also store prices) or `DATABASE_URL="$SUPABASE_URL" python src/pipeline.py` (online)
+- Tests use `TEST_DATABASE_URL` (default: local Docker), never `DATABASE_URL`, so they can't touch the online database
 - Dashboard: `streamlit run app/dashboard.py` (needs the database running; restart it after changing code in `src/`, which Streamlit doesn't reload)
 - Run tests: `pytest`
 
@@ -83,5 +85,6 @@ data/raw/         cached API responses (git-ignored, never commit)
 - Done: calibration analysis (`src/analysis/calibration.py` + tests, `notebooks/calibration.ipynb`). Charts are saved with both interactive and PNG outputs so they show on GitHub. Compare horizons only on markets with all three snapshots (`same_markets_only`). Main finding: well calibrated (1–2 points), but prices are slightly too far from 50%.
 - Done: Streamlit dashboard (`app/dashboard.py`, `.streamlit/config.toml`, smoke tests with `AppTest`). Reads only `markets` + `snapshots`; platform names come from the data. "Same markets at every horizon" is on by default so the horizons are compared fairly.
 - Done: public dashboard at https://polymarket-calibration.streamlit.app (Streamlit Community Cloud, reads Supabase as `dashboard_reader` via the `DATABASE_URL` secret; Supabase locked down by `sql/supabase_security.sql`). Supabase holds markets + snapshots + pipeline_runs only.
-- Next (deployment feature, step by step): incremental pipeline `src/pipeline.py` with data quality checks; GitHub Actions daily schedule; "last updated" on the dashboard.
+- Done: incremental pipeline `src/pipeline.py`. `collect_updates()` in normalize.py is the only place that lists platforms (via `normalize_<platform>_updates`); it downloads the market list and prices only for eligible markets not in the database. Markets whose price download fails aren't loaded, so the next run retries them. `transform/quality.py` checks (download size ≥ 95% of stored markets, schemas, no orphan snapshots) must all pass before anything loads; every run is logged in `pipeline_runs` with `row_counts`, `checks` and `error`.
+- Next (deployment feature): GitHub Actions daily schedule; "last updated" on the dashboard.
 - Earlier ideas: README with the findings and chart; deploy the dashboard (copy `markets` + `snapshots` to Supabase, Streamlit Community Cloud); `src/pipeline.py` to run every step with one command; topic split (Polymarket's `category` is empty, so needs another source, e.g. event tags); Kalshi as a second platform.
