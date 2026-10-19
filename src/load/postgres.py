@@ -57,36 +57,47 @@ def upsert(conn, table, df):
     return len(df)
 
 
-def run_load(tables, database_url=DATABASE_URL):
-    """Load all tables in one transaction and record the run in pipeline_runs.
+def start_run(log_conn):
+    """Make sure the tables exist and record a new run as 'running'. Returns its run_id.
+
+    log_conn should be an autocommit connection, so the log survives a failed load.
+    """
+    create_tables(log_conn)
+    return log_conn.execute(
+        "INSERT INTO pipeline_runs (status) VALUES ('running') RETURNING run_id"
+    ).fetchone()[0]
+
+
+def finish_run(log_conn, run_id, status, row_counts=None, checks=None, error=None):
+    """Record how a run ended: 'success' or 'failed', with row counts, check results and any error."""
+    log_conn.execute(
+        "UPDATE pipeline_runs SET status = %s, finished_at = now(), row_counts = %s, checks = %s, error = %s "
+        "WHERE run_id = %s",
+        (status, Json(row_counts) if row_counts is not None else None,
+         Json(checks) if checks is not None else None, error, run_id),
+    )
+
+
+def load_tables(tables, database_url=DATABASE_URL):
+    """Upsert all tables in one transaction: either every table is loaded, or nothing changes.
 
     tables: {"markets": df, "price_history": df, "snapshots": df}, in this order
-    (markets first, because the other tables refer to it).
+    (markets first, because the other tables refer to it). Returns rows sent per table.
     """
-    # The log uses its own autocommit connection, so a failed load is still recorded
+    with psycopg.connect(database_url) as conn:
+        return {table: upsert(conn, table, df) for table, df in tables.items()}
+
+
+def run_load(tables, database_url=DATABASE_URL):
+    """Load all tables in one transaction and record the run in pipeline_runs."""
     with psycopg.connect(database_url, autocommit=True) as log_conn:
-        create_tables(log_conn)
-        run_id = log_conn.execute(
-            "INSERT INTO pipeline_runs (status) VALUES ('running') RETURNING run_id"
-        ).fetchone()[0]
-
+        run_id = start_run(log_conn)
         try:
-            # One transaction: either every table is loaded, or nothing changes
-            with psycopg.connect(database_url) as conn:
-                row_counts = {table: upsert(conn, table, df) for table, df in tables.items()}
+            row_counts = load_tables(tables, database_url)
         except Exception as error:
-            log_conn.execute(
-                "UPDATE pipeline_runs SET status = 'failed', finished_at = now(), error = %s "
-                "WHERE run_id = %s",
-                (str(error), run_id),
-            )
+            finish_run(log_conn, run_id, "failed", error=str(error))
             raise
-
-        log_conn.execute(
-            "UPDATE pipeline_runs SET status = 'success', finished_at = now(), row_counts = %s "
-            "WHERE run_id = %s",
-            (Json(row_counts), run_id),
-        )
+        finish_run(log_conn, run_id, "success", row_counts=row_counts)
     return row_counts
 
 

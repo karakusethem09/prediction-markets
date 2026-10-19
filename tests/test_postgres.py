@@ -4,27 +4,9 @@ import pandas as pd
 import psycopg
 import pytest
 
-from load.postgres import DATABASE_URL, run_load
+from load.postgres import run_load
 
-TEST_SCHEMA = "pytest_load"
-
-
-@pytest.fixture
-def db_url():
-    """A database URL whose tables all live in an empty test schema, dropped afterwards."""
-    try:
-        with psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=2) as conn:
-            conn.execute(f"DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE")
-            conn.execute(f"CREATE SCHEMA {TEST_SCHEMA}")
-    except psycopg.OperationalError:
-        pytest.skip("PostgreSQL isn't running (start it with: docker compose up -d)")
-
-    # search_path makes every unqualified table name (markets, snapshots, ...) point to the test schema
-    separator = "&" if "?" in DATABASE_URL else "?"
-    yield f"{DATABASE_URL}{separator}options=-csearch_path%3D{TEST_SCHEMA}"
-
-    with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        conn.execute(f"DROP SCHEMA {TEST_SCHEMA} CASCADE")
+# The db_url fixture (a throwaway test schema) lives in conftest.py
 
 
 def utc(text):
