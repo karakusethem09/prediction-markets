@@ -92,10 +92,12 @@ def load_markets(folder):
     return markets
 
 
-def fetch_price_history(market):
+def fetch_price_history(market, refresh=False):
     """Download the daily and hourly price history of one market's first outcome.
 
     Only the first outcome is needed: in a two-outcome market the other price is 1 minus it.
+    refresh=True downloads again even if files exist (used when retrying a market whose
+    earlier download came back empty or incomplete).
     """
     token_id = json.loads(market["clobTokenIds"])[0]
     close_ts = int(datetime.fromisoformat(market["closedTime"]).timestamp())
@@ -114,14 +116,14 @@ def fetch_price_history(market):
 
     for kind, params in requests_to_make.items():
         out_file = PRICES_DIR / kind / f"{market['id']}.json"
-        if out_file.exists():  # downloaded on an earlier run: skip it
+        if out_file.exists() and not refresh:  # downloaded on an earlier run: skip it
             continue
         history = get_with_retry(PRICES_URL, params)
         out_file.write_text(json.dumps(history))
         time.sleep(0.2)  # be polite to the API
 
 
-def fetch_all_price_histories(markets):
+def fetch_all_price_histories(markets, refresh=False):
     """Download price histories for all markets. Returns the ids of markets that failed."""
     (PRICES_DIR / "daily").mkdir(parents=True, exist_ok=True)
     (PRICES_DIR / "hourly").mkdir(parents=True, exist_ok=True)
@@ -131,7 +133,7 @@ def fetch_all_price_histories(markets):
         if not market.get("clobTokenIds"):  # no token means no price history to ask for
             continue
         try:
-            fetch_price_history(market)
+            fetch_price_history(market, refresh=refresh)
         except (requests.HTTPError, RuntimeError) as error:
             # One bad market shouldn't stop a multi-hour run; nothing is saved
             # for it, so the next run tries it again

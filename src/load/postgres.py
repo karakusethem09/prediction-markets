@@ -27,8 +27,18 @@ TABLE_KEYS = {
     "markets": ["market_id"],
     "price_history": ["market_id", "fidelity", "time"],
     "snapshots": ["market_id", "horizon_days"],
+    "processing_status": ["market_id"],
 }
 COPY_CHUNK_ROWS = 500_000  # send big tables in pieces so memory use stays small
+
+
+def lists_to_postgres_arrays(df):
+    """Python lists like [1, 7] become PostgreSQL's array text {1,7}, which COPY understands."""
+    df = df.copy()
+    for column in df.columns:
+        if len(df) and isinstance(df[column].iloc[0], list):
+            df[column] = df[column].map(lambda values: "{" + ",".join(str(v) for v in values) + "}")
+    return df
 
 
 def create_tables(conn):
@@ -37,6 +47,7 @@ def create_tables(conn):
 
 def upsert(conn, table, df):
     """Upsert a DataFrame into a table. Returns the number of rows sent."""
+    df = lists_to_postgres_arrays(df)
     columns = ", ".join(df.columns)
     keys = TABLE_KEYS[table]
     staging = f"staging_{table}"  # table names come from TABLE_KEYS, never from user input

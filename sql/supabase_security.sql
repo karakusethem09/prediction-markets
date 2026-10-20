@@ -18,6 +18,7 @@ ALTER TABLE markets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE processing_status ENABLE ROW LEVEL SECURITY;
 
 -- 3. A read-only login for the public dashboard (its password is set separately, never stored here)
 DO $$
@@ -29,7 +30,7 @@ END
 $$;
 
 GRANT USAGE ON SCHEMA public TO dashboard_reader;
-GRANT SELECT ON markets, snapshots, pipeline_runs TO dashboard_reader;
+GRANT SELECT ON markets, snapshots, pipeline_runs, processing_status TO dashboard_reader;
 
 -- Row Level Security needs an explicit "may read every row" policy for this role
 DROP POLICY IF EXISTS dashboard_reader_select ON markets;
@@ -38,3 +39,5 @@ DROP POLICY IF EXISTS dashboard_reader_select ON snapshots;
 CREATE POLICY dashboard_reader_select ON snapshots FOR SELECT TO dashboard_reader USING (true);
 DROP POLICY IF EXISTS dashboard_reader_select ON pipeline_runs;
 CREATE POLICY dashboard_reader_select ON pipeline_runs FOR SELECT TO dashboard_reader USING (true);
+DROP POLICY IF EXISTS dashboard_reader_select ON processing_status;
+CREATE POLICY dashboard_reader_select ON processing_status FOR SELECT TO dashboard_reader USING (true);

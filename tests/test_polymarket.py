@@ -153,7 +153,7 @@ def test_fetch_all_skips_markets_without_tokens_and_continues_after_a_failure(mo
     markets[1]["clobTokenIds"] = markets[2]["clobTokenIds"] = '["t"]'
     fetched = []
 
-    def fake_fetch_price_history(market):
+    def fake_fetch_price_history(market, refresh=False):
         if market["id"] == "bad":
             raise RuntimeError("gave up")
         fetched.append(market["id"])
@@ -164,3 +164,13 @@ def test_fetch_all_skips_markets_without_tokens_and_continues_after_a_failure(mo
 
     assert failed == ["bad"]
     assert fetched == ["good"]  # the failure didn't stop the run, and no-tokens was skipped
+
+
+def test_price_history_refresh_downloads_again(fake_prices, tmp_path):
+    (tmp_path / "daily" / "123.json").write_text('{"history": []}')  # an earlier, empty download
+    (tmp_path / "hourly" / "123.json").write_text('{"history": []}')
+
+    polymarket.fetch_price_history(MARKET, refresh=True)
+
+    assert len(fake_prices) == 2  # both files were downloaded again
+    assert json.loads((tmp_path / "daily" / "123.json").read_text())["history"]  # and overwritten

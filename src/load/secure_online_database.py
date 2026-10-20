@@ -1,10 +1,13 @@
 """Apply sql/supabase_security.sql to the online database and give dashboard_reader a new password.
 
 Run once (safe to rerun):  set -a; source .env; set +a; python src/load/secure_online_database.py
+After adding a table, rerun with --keep-password: it applies the rules without changing the
+dashboard's password (a new password would also have to go into the Streamlit secret).
 
 Reads SUPABASE_URL from the environment and appends DASHBOARD_DATABASE_URL (the read-only
 login for the public dashboard) to .env. Passwords are never printed.
 """
+import argparse
 import os
 import secrets
 from pathlib import Path
@@ -32,11 +35,20 @@ def reader_url(admin_url, password):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Lock down the online database.")
+    parser.add_argument("--keep-password", action="store_true",
+                        help="only apply the security rules; leave dashboard_reader's password as it is")
+    args = parser.parse_args()
     admin_url = os.environ["SUPABASE_URL"]
-    password = secrets.token_urlsafe(24)
 
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(SECURITY_SQL.read_text())
+    if args.keep_password:
+        print("Security settings applied; dashboard_reader's password unchanged.")
+        raise SystemExit
+
+    password = secrets.token_urlsafe(24)
+    with psycopg.connect(admin_url, autocommit=True) as conn:
         # sql.Literal quotes the password safely; ALTER ROLE can't take a normal %s parameter
         conn.execute(sql.SQL("ALTER ROLE {} PASSWORD {}").format(sql.Identifier(READER), sql.Literal(password)))
     print("Security settings applied and dashboard_reader password set.")
