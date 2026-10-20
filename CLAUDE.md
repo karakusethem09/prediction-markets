@@ -28,7 +28,7 @@ macOS, Python 3.13, requests, pandas, pandera, PostgreSQL 16 (Docker Compose), S
 - Lock down Supabase / reset the read-only password: `python src/load/secure_online_database.py` (applies `sql/supabase_security.sql`). After adding a table, run it with `--keep-password`, or the live dashboard loses its database login until the Streamlit secret is updated. `--verify` only checks (RLS on, no web API access, reader read-only) and exits 1 on any problem
 - Daily incremental update (only new markets): `python src/pipeline.py` (local; add `--with-prices` to also store prices) or `DATABASE_URL="$SUPABASE_URL" python src/pipeline.py` (online)
 - Tests use `TEST_DATABASE_URL` (default: local Docker), never `DATABASE_URL`, so they can't touch the online database. With `REQUIRE_DATABASE=1` (set in CI) a missing database fails the run instead of skipping database tests. Dashboard tests use a synthetic dataset (`tests/test_dashboard.py`), never real data
-- Dashboard: `streamlit run app/dashboard.py` (needs the database running). Streamlit keeps imported `src/` modules in memory, so `app/fresh_imports.py` reloads any project module whose file changed; add new `src/` modules to its `PROJECT_MODULES` list, in dependency order
+- Dashboard: `streamlit run app/dashboard.py` (needs the database running). Streamlit keeps imported `src/` modules in memory, so the top of `app/dashboard.py` reloads every project module on each run (~1 ms); add new `src/` modules to that list, in dependency order
 - Run tests: `pytest`
 
 ## Target structure
