@@ -7,14 +7,21 @@ at a time, picked with 1D / 7D / 30D buttons. Uses only the markets, snapshots a
 pipeline_runs tables. Platform names come from the data, never from this code.
 """
 import html
+import importlib
 
 import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
-from fresh_imports import reload_changed_modules
-
-reload_changed_modules()  # Streamlit Cloud keeps old src/ code in memory after a push; see fresh_imports.py
+# Streamlit keeps imported modules in memory between runs. When Streamlit Cloud pulls new code
+# while the app is awake, this script is re-run but our old src/ modules would stay loaded, and
+# new dashboard code would meet old analysis code (on 2026-10-20 that broke the live site with
+# an ImportError). So reload our own modules on every run, in dependency order: it takes ~1 ms.
+# This lives here, not in a helper module, because only this script is guaranteed to be re-run.
+for module_name in ["extract.polymarket", "transform.schemas", "transform.snapshots", "transform.normalize",
+                    "transform.completeness", "transform.quality", "load.postgres", "analysis.calibration",
+                    "analysis.bootstrap"]:
+    importlib.reload(importlib.import_module(module_name))
 
 from analysis.bootstrap import apply_event_intervals, event_bootstrap  # noqa: E402
 from analysis.calibration import (
@@ -22,8 +29,6 @@ from analysis.calibration import (
     load_pipeline_status, recent_markets, same_markets_only, scores,
 )
 from load.postgres import DATABASE_URL  # noqa: E402
-
-reload_changed_modules()  # records which version of each newly imported module is in memory
 
 VOLUME_STEPS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000]
 HORIZON_BUTTONS = {"1D": 1, "7D": 7, "30D": 30}
