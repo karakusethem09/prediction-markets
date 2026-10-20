@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from analysis.calibration import (
-    calibration_table, describe_age, filter_snapshots, price_bin, recent_markets, same_markets_only, scores,
+    calibration_table, describe_age, filter_snapshots, freshness, price_bin, recent_markets, same_markets_only, scores,
     wilson_interval,
 )
 
@@ -112,3 +112,33 @@ def test_recent_markets_one_row_per_market_newest_first():
     assert recent["market_id"].tolist() == ["new", "old"]
     assert recent.loc[1, ["price_1d", "price_7d"]].tolist() == [0.8, 0.6]
     assert pd.isna(recent.loc[0, "price_7d"])  # "new" had no 7-day snapshot
+
+
+FRESH_NOW = pd.Timestamp("2026-10-20 12:00", tz="UTC")
+
+
+def run_status(hours_since_success=None, last_run_failed=False, new_markets=36):
+    success = None if hours_since_success is None else FRESH_NOW - pd.Timedelta(hours=hours_since_success)
+    return {"last_success_at": success, "last_success_rows": {"markets": new_markets},
+            "last_run_failed": last_run_failed}
+
+
+@pytest.mark.parametrize("status, expected_state", [
+    (run_status(5), "live"),
+    (run_status(35), "live"),  # a late daily run is still fine
+    (run_status(37), "stale"),  # missed a day: the job may have stopped
+    (run_status(5 * 24), "stale"),  # the Monday-to-Friday case: never shown as LIVE
+    (run_status(5, last_run_failed=True), "failed"),  # a recent success doesn't hide a failure
+    (run_status(5 * 24, last_run_failed=True), "failed"),  # failed beats stale
+    (run_status(None), "no_data"),
+    (run_status(None, last_run_failed=True), "failed"),
+])
+def test_freshness_states(status, expected_state):
+    assert freshness(status, FRESH_NOW)["state"] == expected_state
+
+
+def test_freshness_details_tell_visitors_what_is_going_on():
+    assert freshness(run_status(5), FRESH_NOW)["detail"] == "updated 5 hours ago · 36 new markets"
+    assert freshness(run_status(5, new_markets=0), FRESH_NOW)["detail"] == "updated 5 hours ago · no new markets"
+    assert "No successful update for 4 days" in freshness(run_status(4 * 24 + 1), FRESH_NOW)["detail"]
+    assert "from the last successful update, 2 days ago" in freshness(run_status(48, last_run_failed=True), FRESH_NOW)["detail"]
