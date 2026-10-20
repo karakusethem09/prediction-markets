@@ -69,6 +69,13 @@ def test_headline_numbers(app):
     assert app.metric[0].value == str(LONG_MARKETS)  # by default only markets with all three horizons
 
 
+def test_accuracy_table_shows_the_calibration_slope_with_an_interval(app):
+    slopes = table_with_column(app, "slope")["slope"]
+    assert len(slopes) == 3
+    number = r"-?\d\.\d\d"
+    assert slopes.str.fullmatch(rf"{number} \[{number}, {number}\]|not enough data").all()  # e.g. "0.74 [0.68, 0.79]"
+
+
 def test_same_markets_toggle(app):
     assert table_with_column(app, "brier")["markets"].tolist() == [40, 40, 40]
 
@@ -97,12 +104,27 @@ def test_recently_resolved_lists_the_newest_markets_first(app):
     assert set(recent["result"]) <= {"✓", "✗"}
 
 
-def test_status_pill_shows_the_last_successful_update(app):
-    pill = next(m.value for m in app.markdown if 'class="status-pill"' in m.value)
-    assert "LIVE" in pill and "50 new markets" in pill
+def status_pill(app):
+    return next(m.value for m in app.markdown if 'class="status-pill"' in m.value)
 
 
-def test_failed_latest_update_shows_a_warning(dashboard_db):
+def test_recent_success_shows_live(app):
+    assert "LIVE" in status_pill(app) and "50 new markets" in status_pill(app)
+    assert not app.warning and not app.error  # nothing to warn about
+
+
+def test_old_success_shows_stale_not_live(dashboard_db):
+    """The workflow succeeded days ago and then stopped: never show LIVE on old data."""
+    with psycopg.connect(dashboard_db, autocommit=True) as conn:
+        conn.execute("UPDATE pipeline_runs SET finished_at = now() - interval '3 days'")
+
+    app = open_dashboard(dashboard_db)
+
+    assert "STALE" in status_pill(app) and "LIVE" not in status_pill(app)
+    assert "No successful update for 3 days" in app.warning[0].value
+
+
+def test_failed_latest_update_shows_an_error(dashboard_db):
     with psycopg.connect(dashboard_db, autocommit=True) as conn:
         run_id = start_run(conn)
         finish_run(conn, run_id, "failed", error="simulated failure")
@@ -110,8 +132,10 @@ def test_failed_latest_update_shows_a_warning(dashboard_db):
     app = open_dashboard(dashboard_db)
 
     assert not app.exception
-    pill = next(m.value for m in app.markdown if 'class="status-pill"' in m.value)
-    assert "UPDATE FAILED" in pill
+    assert "UPDATE FAILED" in status_pill(app)
+    assert app.error[0].value.startswith("The most recent update failed")
+    history = table_with_column(app, "new_markets")
+    assert history["status"].tolist() == ["failed", "success"]  # newest first, shown in Update history
 
 
 def test_impossible_filter_shows_a_warning_not_an_error(app):

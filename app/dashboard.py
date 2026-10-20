@@ -12,15 +12,17 @@ import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
+from analysis.bootstrap import apply_event_intervals, event_bootstrap
 from analysis.calibration import (
-    calibration_figure, calibration_table, describe_age, filter_snapshots, load_calibration_data,
+    calibration_figure, calibration_table, filter_snapshots, freshness, load_calibration_data,
     load_pipeline_status, recent_markets, same_markets_only, scores,
 )
 from load.postgres import DATABASE_URL
 
 VOLUME_STEPS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000]
 HORIZON_BUTTONS = {"1D": 1, "7D": 7, "30D": 30}
-STATUS_GOOD, STATUS_CRITICAL = "#0ca30c", "#d03b3b"  # reserved for pipeline health, always shown with a label
+# Status colors are reserved for pipeline health and always come with a word (LIVE, STALE, ...)
+STATUS_COLORS = {"live": "#0ca30c", "stale": "#fab219", "failed": "#d03b3b", "no_data": "#898781"}
 
 st.set_page_config(page_title="Prediction market calibration", layout="wide")
 
@@ -58,30 +60,35 @@ def get_data():
     return load_calibration_data(database_url())
 
 
+@st.cache_data(show_spinner=False)  # once per filter combination; ~0.3 s for the default view
+def uncertainty(filtered):
+    """Event-level bootstrap: related markets (same event) are resampled together."""
+    return event_bootstrap(filtered, n_boot=300)
+
+
 @st.cache_data(ttl=600)  # the "last updated" line is cheap, so refresh it more often
 def get_status():
     return load_pipeline_status(database_url())
 
 
-def status_pill(status):
-    """'● LIVE · updated 2 hours ago · 36 new markets', or a red warning if the last run failed."""
-    if status["last_success_at"] is None:
-        return ""
-    age = describe_age(status["last_success_at"], pd.Timestamp.now(tz="UTC"))
-    added = (status["last_success_rows"] or {}).get("markets")
-    if status["last_run_failed"]:
-        color, label, text = STATUS_CRITICAL, "UPDATE FAILED", f"showing data from {age}"
-    else:
-        color, label = STATUS_GOOD, "LIVE"
-        text = f"updated {age}" + ("" if added is None else f" · {added:,} new markets" if added else " · no new markets")
-    return (f'<span class="status-pill"><span class="status-dot" style="background:{color}"></span>'
-            f'<b>{label}</b> {html.escape(text)}</span>')
+def status_pill(fresh):
+    """The colored pill under the title, e.g. '● LIVE updated 2 hours ago · 36 new markets'."""
+    text = fresh["detail"] if fresh["state"] == "live" else ""  # other states explain themselves below
+    return (f'<span class="status-pill"><span class="status-dot" style="background:{STATUS_COLORS[fresh["state"]]}">'
+            f'</span><b>{fresh["label"]}</b> {html.escape(text)}</span>')
 
 
 data = get_data()
 
 st.title("Are prediction market prices calibrated?")
-st.markdown(status_pill(get_status()), unsafe_allow_html=True)
+# Data freshness, always shown: LIVE, STALE, UPDATE FAILED or NO UPDATES YET (rule in analysis.freshness)
+status = get_status()
+fresh = freshness(status, pd.Timestamp.now(tz="UTC"))
+st.markdown(status_pill(fresh), unsafe_allow_html=True)
+if fresh["state"] == "failed":
+    st.error(fresh["detail"], icon="⚠️")
+elif fresh["state"] in ("stale", "no_data"):
+    st.warning(fresh["detail"], icon="⏳")
 st.markdown(
     "When a market's price says **70%**, does the event happen about **70%** of the time? "
     "Each dot groups markets with similar prices. On the diagonal, prices were honest "
@@ -131,11 +138,13 @@ for tile, (horizon, row) in zip(tiles[1:], horizon_scores.iterrows()):
 # One chart at a time: readable on a phone, and like switching timeframes on a trading chart
 picked = st.segmented_control("Time before close", list(HORIZON_BUTTONS), default="1D")
 horizon = HORIZON_BUTTONS[picked or "1D"]  # clicking the selected button again un-selects it
-table = calibration_table(filtered)
+boot_summary, boot_bins = uncertainty(filtered)
+table = apply_event_intervals(calibration_table(filtered), boot_bins)
 # theme=None keeps the chart's own colors instead of Streamlit's default chart theme
 st.plotly_chart(calibration_figure(table[table["horizon_days"] == horizon], theme="dark"),
                 theme=None, width="stretch")
-st.caption("Vertical bars are 95% confidence intervals: groups with fewer markets have longer bars.")
+st.caption("Vertical bars are 95% intervals from resampling whole events, because markets in the same "
+           "event (e.g. candidates in one election) move together. Groups with fewer events have longer bars.")
 
 # The newest markets the daily pipeline added, like a feed of settled trades
 st.subheader("Recently resolved")
@@ -177,11 +186,32 @@ with st.expander("Table view"):
         hide_index=True,
     )
 
+with st.expander("Update history"):
+    runs = status["recent_runs"]
+    st.dataframe(
+        runs.assign(new_markets=pd.to_numeric(runs["new_markets"])),
+        column_config={
+            "started_at": st.column_config.DatetimeColumn("Started (UTC)", format="MMM D, HH:mm"),
+            "status": "Result",
+            "new_markets": st.column_config.NumberColumn("New markets", format="%d"),
+            "error": "Error",
+        },
+        hide_index=True,
+    )
+    st.caption("The update runs automatically every day. The status above turns STALE if no update "
+               "has succeeded for 36 hours, and UPDATE FAILED if the latest one failed.")
+
 with st.expander("Accuracy scores"):
     st.dataframe(
-        horizon_scores[["markets", "events", "brier", "brier_skill"]].reset_index(),
+        horizon_scores[["markets", "events", "brier", "brier_skill"]].reset_index().assign(
+            slope=[f"{r.slope:.2f} [{r.slope_low:.2f}, {r.slope_high:.2f}]" if pd.notna(r.slope_low)
+                   else "not enough data" for r in boot_summary.itertuples()]),
         column_config={
             "horizon_days": "Days before close",
+            "slope": st.column_config.TextColumn(
+                "Calibration slope [95% interval]",
+                help="Fitted on prices between 5% and 95%. 1 = honest prices; below 1 = prices too extreme "
+                     "(things happen closer to 50% than priced). The interval comes from resampling events."),
             "brier": st.column_config.NumberColumn("Brier score", help="0 = perfect, lower is better", format="%.3f"),
             "brier_skill": st.column_config.NumberColumn(
                 "Brier skill", help="1 = perfect, 0 = no better than always guessing the base rate", format="%.2f"),

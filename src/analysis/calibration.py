@@ -24,32 +24,72 @@ THEMES = {
 }
 
 
-def load_calibration_data(database_url=DATABASE_URL):
-    """One row per snapshot, with the market's actual outcome."""
+def read_sql(database_url, *queries):
+    """Run read-only queries and return one DataFrame per query, closing the connections afterwards."""
     # "postgresql+psycopg" tells SQLAlchemy to use the psycopg driver we installed
     engine = create_engine(database_url.replace("postgresql://", "postgresql+psycopg://", 1))
+    try:
+        with engine.connect() as conn:
+            return [pd.read_sql(query, conn) for query in queries]
+    finally:
+        engine.dispose()  # otherwise the engine keeps its pool of connections open
+
+
+def load_calibration_data(database_url=DATABASE_URL):
+    """One row per snapshot, with the market's actual outcome."""
     sql = """
         SELECT s.market_id, s.horizon_days, s.price, m.outcome, m.event_id, m.volume_usd,
                m.platform, m.close_time, m.question
         FROM snapshots s
         JOIN markets m USING (market_id)
     """
-    return pd.read_sql(sql, engine)
+    return read_sql(database_url, sql)[0]
 
 
-def load_pipeline_status(database_url=DATABASE_URL):
-    """When the data was last updated: the latest successful run, and the latest run of any kind
-    (so the dashboard can say so if the most recent update failed)."""
-    engine = create_engine(database_url.replace("postgresql://", "postgresql+psycopg://", 1))
-    last_success = pd.read_sql(
+STALE_AFTER = pd.Timedelta(hours=36)  # the update runs daily, so 36 h without one means it missed a day
+
+
+def load_pipeline_status(database_url=DATABASE_URL, history=10):
+    """When the data was last updated, whether the latest run failed, and the last `history` runs."""
+    last_success, runs = read_sql(
+        database_url,
         "SELECT finished_at, row_counts FROM pipeline_runs WHERE status = 'success' "
-        "ORDER BY finished_at DESC LIMIT 1", engine)
-    last_run = pd.read_sql("SELECT status FROM pipeline_runs ORDER BY started_at DESC LIMIT 1", engine)
+        "ORDER BY finished_at DESC LIMIT 1",
+        "SELECT started_at, status, row_counts->>'markets' AS new_markets, error "
+        f"FROM pipeline_runs ORDER BY started_at DESC LIMIT {int(history)}",
+    )
     return {
         "last_success_at": last_success["finished_at"].iloc[0] if len(last_success) else None,
         "last_success_rows": last_success["row_counts"].iloc[0] if len(last_success) else None,
-        "last_run_failed": bool(len(last_run)) and last_run["status"].iloc[0] == "failed",
+        "last_run_failed": bool(len(runs)) and runs["status"].iloc[0] == "failed",
+        "recent_runs": runs,
     }
+
+
+def freshness(status, now, stale_after=STALE_AFTER):
+    """How trustworthy the data's freshness is: a state, a short label and a sentence for visitors.
+
+    Checked in this order, first match wins:
+      failed   the most recent run failed
+      stale    no successful update for longer than stale_after (e.g. the daily job stopped)
+      live     the last successful update is recent
+      no_data  no successful update was ever recorded
+    """
+    last_success = status["last_success_at"]
+    age = describe_age(last_success, now) if last_success is not None else None
+    if status["last_run_failed"]:
+        detail = (f"The most recent update failed. The data is from the last successful update, {age}."
+                  if age else "The most recent update failed, and no update has succeeded yet.")
+        return {"state": "failed", "label": "UPDATE FAILED", "detail": detail}
+    if last_success is None:
+        return {"state": "no_data", "label": "NO UPDATES YET", "detail": "No update has been recorded yet."}
+    if now - last_success > stale_after:
+        return {"state": "stale", "label": "STALE",
+                "detail": f"No successful update for {age.removesuffix(' ago')}. Updates run daily, "
+                          "so the scheduled job has probably stopped."}
+    added = (status["last_success_rows"] or {}).get("markets")
+    new = "" if added is None else f" · {added:,} new markets" if added else " · no new markets"
+    return {"state": "live", "label": "LIVE", "detail": f"updated {age}{new}"}
 
 
 def recent_markets(data, n=15):
