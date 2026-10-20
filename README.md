@@ -12,16 +12,17 @@ If the answer is yes at every price level, the market is **calibrated**: its pri
 
 ![Calibration curves: market price vs how often the outcome happened, 1, 7 and 30 days before close](docs/calibration.png)
 
-*Each dot groups markets with similar prices. On the gray diagonal, prices match reality exactly. Vertical bars are 95% confidence intervals. Chart: the 3,499 markets that had a price at all three horizons as of October 17, 2026.*
+*Each dot groups markets with similar prices. On the gray diagonal, prices match reality exactly. Vertical bars are 95% intervals from resampling whole events, because related markets move together. Chart: the 3,513 markets that had a price at all three horizons as of October 20, 2026.*
 
 ## What I found
 
-*These numbers come from the data as of October 17, 2026 (10,792 markets). The live dashboard always shows the latest numbers, which shift slightly as new markets resolve.*
+*These numbers come from the data as of October 20, 2026 (10,768 markets with snapshots). The live dashboard always shows the latest numbers, which shift slightly as new markets resolve.*
 
-1. **The crowd is well calibrated.** On average, prices were only **1.2, 1.9 and 2.1 percentage points** away from what actually happened, 1, 7 and 30 days before the market closed.
+1. **The crowd is well calibrated.** On average, prices were only **1.2, 1.9 and 2.0 percentage points** away from what actually happened, 1, 7 and 30 days before the market closed (on the 3,513 markets with all three; 95% intervals [0.9, 2.1], [1.5, 3.0] and [1.4, 3.2]).
 2. **Prices get sharper as the deadline approaches.** On the same markets, the Brier score (lower is better) falls from **0.089** at 30 days to **0.067** at 7 days to **0.046** at 1 day.
-3. **There is one consistent bias: prices are a little too far from 50%.** Across all 10,720 markets priced one day before close, outcomes priced at 10–20% averaged a price of **14.9%** but happened **25.0%** of the time (532 markets). In that group, every price bucket below 50% happened more often than priced, and every bucket above 50% less often. This is the opposite of the well-known *favorite–longshot bias*, where long shots are usually overpriced.
-4. **No single event drives the pattern.** It holds when every event counts only once.
+3. **Overall, prices are a little too extreme.** The *calibration slope*, fitted on prices between 5% and 95%, is **0.74** [0.68, 0.79] one day before close, **0.72** [0.66, 0.80] at 7 days and **0.82** [0.71, 0.93] at 30 days. A slope of 1 would mean honest prices; below 1 means things happen closer to 50% than priced. For example, outcomes priced 10–20% one day before close happened **25.1%** of the time against an average price of **14.9%** (534 markets). This is the opposite of the well-known *favorite–longshot bias*, where long shots are usually overpriced.
+4. **Close to the end, the bias comes mostly from shorter markets.** On long-running markets it is clear only 30 days out (0.82 [0.70, 0.93]); at 1 and 7 days the intervals include 1. That points at markets open only days or weeks, like sports games: the next thing to test.
+5. **The intervals account for related markets.** Markets in one event (e.g. candidates in an election) share an outcome, so all intervals come from an [event-level bootstrap](src/analysis/bootstrap.py) that resamples whole events. It widens them only slightly, and no conclusion changes.
 
 The full analysis, with the robustness checks and caveats, is in [`notebooks/calibration.ipynb`](notebooks/calibration.ipynb).
 
@@ -54,7 +55,8 @@ The [live dashboard](https://polymarket-calibration.streamlit.app) reads from a 
 1. **Every day**, the workflow first runs all the tests against a throwaway PostgreSQL database. If any test fails, nothing is updated.
 2. It then runs [`src/pipeline.py`](src/pipeline.py), which is **incremental**: it downloads the market list, but fetches price history only for markets that resolved since the last run, typically a few dozen instead of 11,000, plus markets still waiting for their prices (see below).
 3. Before writing anything, **[data quality checks](src/transform/quality.py)** must pass: the download isn't suspiciously small, both tables match their schemas (including "no price from after the snapshot time"), and no snapshot lacks its market. If one of these fails, nothing is loaded. A separate coverage check records what share of possible snapshots was found, without blocking the update.
-4. Every run, successful or not, is logged in a `pipeline_runs` table with row counts, check results and any error. The dashboard shows when the last successful update happened.
+4. Every run, successful or not, is logged in a `pipeline_runs` table with row counts, check results and any error.
+5. The dashboard always shows the data's freshness: **LIVE** if the last successful update is under 36 hours old, **STALE** if not (the daily job has probably stopped), and **UPDATE FAILED** if the latest run failed, each with an explanation and the recent update history. So it can never say LIVE while showing days-old data.
 
 The dashboard connects with a read-only database login, and the hosted database blocks access through Supabase's public web API ([`sql/supabase_security.sql`](sql/supabase_security.sql)). `python src/load/secure_online_database.py --verify` checks that every table is still locked down.
 
@@ -79,6 +81,7 @@ Two design decisions matter here:
 - **The real close time, not the deadline.** Many markets resolve before their deadline (a question like "…by the end of 2027?" can be settled long before then), so horizons are measured from when the market actually closed.
 - **Fair comparisons between horizons.** The 1-day group naturally contains thousands of short markets, like sports games, that weren't open 30 days earlier. Horizons are therefore compared on the same set of markets.
 - **Short markets are excluded.** Markets open for less than a day are easier to move with a single large trade, and they have no meaningful 1-day horizon.
+- **Uncertainty that respects related markets.** Standard confidence intervals assume every market is independent, but markets in one event share an outcome. The [event-level bootstrap](src/analysis/bootstrap.py) resamples whole events instead. The calibration slope is fitted only on prices between 5% and 95%, because in testing, how near-certain prices were squashed at the edge of the scale moved the slope from 0.97 to 1.21.
 
 ## Tech stack
 
@@ -114,7 +117,7 @@ To explore the analysis, open `notebooks/calibration.ipynb` in VS Code or Jupyte
 pytest
 ```
 
-76 tests cover the API retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, snapshot completeness and retries, the incremental pipeline, the database upserts, the calibration math and the dashboard itself. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database. The dashboard tests run the real Streamlit app against a small synthetic dataset, so they check exact numbers and need no real data.
+98 tests cover the API retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, snapshot completeness and retries, the incremental pipeline, the database upserts, the calibration math, the event-level bootstrap (checked against simulated data with a known answer), the freshness rule and the dashboard itself. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database. The dashboard tests run the real Streamlit app against a small synthetic dataset, so they check exact numbers and need no real data.
 
 [GitHub Actions](.github/workflows/tests.yml) runs every test on each push and pull request, and again before every daily update. There, a missing database makes the run fail instead of skipping the database tests, so a green badge means every test actually ran.
 
@@ -142,5 +145,5 @@ data/raw/         cached API responses (git-ignored)
 
 ## What's next
 
-- Split the results by topic, to see where the bias in finding 3 comes from.
+- Split the results by topic (e.g. sports vs politics), to test whether the bias in findings 3 and 4 comes from short sports markets.
 - Add [Kalshi](https://kalshi.com) as a second platform. The pipeline is built so that only the extract and normalize steps are platform-specific.
