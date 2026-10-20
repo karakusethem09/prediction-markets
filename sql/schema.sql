@@ -32,6 +32,18 @@ CREATE TABLE IF NOT EXISTS snapshots (
     CHECK (price_time <= target_time)           -- never a price from the future
 );
 
+-- Whether each market has every snapshot it could have (see src/transform/completeness.py).
+-- Kept separate from markets so the standard market columns stay the same for every platform.
+CREATE TABLE IF NOT EXISTS processing_status (
+    market_id          text PRIMARY KEY REFERENCES markets (market_id),
+    status             text NOT NULL CHECK (status IN ('complete', 'retry_needed', 'unavailable')),
+    reason             text,                    -- why snapshots are missing, if they are
+    possible_horizons  smallint[] NOT NULL,     -- horizons the market was open for, e.g. {1,7}
+    found_horizons     smallint[] NOT NULL,     -- horizons that have a snapshot, e.g. {1}
+    attempts           smallint NOT NULL CHECK (attempts >= 1),
+    last_attempt_at    timestamptz NOT NULL
+);
+
 -- One row per load, so we can see when data was loaded and whether it worked
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     run_id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

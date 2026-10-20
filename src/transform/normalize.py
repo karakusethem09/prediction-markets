@@ -127,34 +127,44 @@ def build_normalized_tables(verbose=False):
 
 @dataclass
 class Updates:
-    """What a pipeline run found: new markets and their prices, ready for snapshots and loading."""
+    """What a pipeline run found, ready for snapshots and loading."""
     eligible_markets: int  # all downloaded markets that pass our filters, new or not
-    markets: pd.DataFrame  # only the ones not in the database yet
-    prices: pd.DataFrame  # prices of those new markets
-    failed_downloads: list  # markets whose prices failed to download: retried next run
+    markets: pd.DataFrame  # new markets: not in the database yet
+    retried: pd.DataFrame  # markets already in the database whose missing snapshots we try again
+    prices: pd.DataFrame  # prices of the new and the retried markets
+    failed_downloads: list  # markets whose price download failed this run
 
 
-def normalize_polymarket_updates(existing_market_ids):
-    """Download the latest market list, keep eligible markets that aren't in the database yet,
-    and download price history only for those."""
+def normalize_polymarket_updates(existing_market_ids, retry_market_ids=()):
+    """Download the latest market list, then price history for (1) eligible markets that aren't
+    in the database yet and (2) markets marked for a retry, downloaded again from scratch."""
     polymarket.fetch_resolved_markets()  # the full list is cheap (~1 minute), prices are not
     raw_markets = load_markets(polymarket.RAW_DIR)
     markets = drop_short_markets(normalize_polymarket_markets(raw_markets))
     new = markets[~markets["market_id"].isin(existing_market_ids)]
+    retried = markets[markets["market_id"].isin(retry_market_ids)]
 
-    new_ids = set(new["market_id"])
-    raw_new = [m for m in raw_markets if f"poly:{m['id']}" in new_ids]
-    failed = polymarket.fetch_all_price_histories(raw_new)
-    # A market whose prices failed isn't loaded, so the next run sees it as new and tries again
-    new = new[~new["market_id"].isin({f"poly:{market_id}" for market_id in failed})].reset_index(drop=True)
+    def raw_for(table):
+        ids = set(table["market_id"])
+        return [m for m in raw_markets if f"poly:{m['id']}" in ids]
 
-    prices = normalize_polymarket_prices(new, prices_dir=polymarket.PRICES_DIR)
-    return Updates(len(markets), new, prices, [f"poly:{m}" for m in failed])
+    failed = polymarket.fetch_all_price_histories(raw_for(new))
+    # refresh=True: the files from the earlier attempt were empty or incomplete, so don't reuse them
+    failed += polymarket.fetch_all_price_histories(raw_for(retried), refresh=True)
+    failed = {f"poly:{market_id}" for market_id in failed}
+
+    # A new market whose prices failed isn't loaded, so the next run sees it as new and tries again.
+    # A retried market stays in the run either way: its attempt still counts.
+    new = new[~new["market_id"].isin(failed)].reset_index(drop=True)
+    retried = retried.reset_index(drop=True)
+    with_prices = pd.concat([new, retried[~retried["market_id"].isin(failed)]], ignore_index=True)
+    prices = normalize_polymarket_prices(with_prices, prices_dir=polymarket.PRICES_DIR)
+    return Updates(len(markets), new, retried, prices, sorted(failed))
 
 
-def collect_updates(existing_market_ids):
-    """Every platform's new markets and prices. The pipeline calls this, so it never names a platform."""
-    return normalize_polymarket_updates(existing_market_ids)
+def collect_updates(existing_market_ids, retry_market_ids=()):
+    """Every platform's new and retried markets. The pipeline calls this, so it never names a platform."""
+    return normalize_polymarket_updates(existing_market_ids, retry_market_ids)
 
 
 if __name__ == "__main__":
