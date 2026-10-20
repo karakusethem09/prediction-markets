@@ -3,7 +3,8 @@ import pandas as pd
 import pytest
 
 from analysis.calibration import (
-    calibration_table, describe_age, filter_snapshots, price_bin, same_markets_only, scores, wilson_interval,
+    calibration_table, describe_age, filter_snapshots, price_bin, recent_markets, same_markets_only, scores,
+    wilson_interval,
 )
 
 
@@ -94,3 +95,20 @@ def test_filter_snapshots():
 def test_describe_age(seconds_ago, expected):
     now = pd.Timestamp("2026-10-18 12:00", tz="UTC")
     assert describe_age(now - pd.Timedelta(seconds=seconds_ago), now) == expected
+
+
+def test_recent_markets_one_row_per_market_newest_first():
+    data = pd.DataFrame({
+        "market_id": ["old", "old", "new"],
+        "horizon_days": [1, 7, 1],
+        "price": [0.8, 0.6, 0.1],
+        "question": ["Old?", "Old?", "New?"],
+        "close_time": pd.to_datetime(["2025-01-01", "2025-01-01", "2025-06-01"], utc=True),
+        "outcome": [1, 1, 0],
+    })
+
+    recent = recent_markets(data)
+
+    assert recent["market_id"].tolist() == ["new", "old"]
+    assert recent.loc[1, ["price_1d", "price_7d"]].tolist() == [0.8, 0.6]
+    assert pd.isna(recent.loc[0, "price_7d"])  # "new" had no 7-day snapshot

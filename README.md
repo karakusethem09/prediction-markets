@@ -1,6 +1,6 @@
 # Are Prediction Markets Calibrated?
 
-**[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself. The data updates automatically every day as new markets resolve.
+**[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself. The data updates automatically every day as new markets resolve. *If the app has gone to sleep after a quiet spell, click "Yes, get this app back up!" and give it about 30 seconds.*
 
 [![Daily update](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml/badge.svg)](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml)
 
@@ -8,13 +8,15 @@ Every day, people around the world try to predict the future: who will win an el
 
 A single market is just one guess, and one guess can't be right or wrong about a probability. If something priced at 70% doesn't happen, the market wasn't necessarily wrong, because 30% outcomes happen all the time. So I got curious about a bigger question: **what happens when you add thousands of these markets together?** Of all the things the crowd priced at 70%, did about 70% actually happen? Of everything priced at 10%, did about one in ten come true?
 
-If the answer is yes at every price level, the market is **calibrated**: its prices can be read as honest probabilities. This project measures that for [Polymarket](https://polymarket.com), using 10,792 resolved markets that each traded at least $1 million.
+If the answer is yes at every price level, the market is **calibrated**: its prices can be read as honest probabilities. This project measures that for [Polymarket](https://polymarket.com), using more than 10,000 resolved markets that each traded at least $1 million.
 
 ![Calibration curves: market price vs how often the outcome happened, 1, 7 and 30 days before close](docs/calibration.png)
 
-*Each dot groups markets with similar prices. On the gray diagonal, prices match reality exactly. Vertical bars are 95% confidence intervals. Chart: the 3,499 markets that have a price at all three horizons.*
+*Each dot groups markets with similar prices. On the gray diagonal, prices match reality exactly. Vertical bars are 95% confidence intervals. Chart: the 3,499 markets that had a price at all three horizons as of October 17, 2026.*
 
 ## What I found
+
+*These numbers come from the data as of October 17, 2026 (10,792 markets). The live dashboard always shows the latest numbers, which shift slightly as new markets resolve.*
 
 1. **The crowd is well calibrated.** On average, prices were only **1.2, 1.9 and 2.1 percentage points** away from what actually happened, 1, 7 and 30 days before the market closed.
 2. **Prices get sharper as the deadline approaches.** On the same markets, the Brier score (lower is better) falls from **0.089** at 30 days to **0.067** at 7 days to **0.046** at 1 day.

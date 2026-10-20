@@ -13,13 +13,15 @@ from load.postgres import DATABASE_URL
 N_BINS = 10  # price buckets of 10 percentage points: 0-10%, 10-20%, ..., 90-100%
 Z_95 = 1.96  # z-value for a 95% confidence interval
 
-# Chart colors (light theme): one series color, recessive gray chrome
-SURFACE = "#fcfcfb"
-TEXT_PRIMARY = "#0b0b0b"
-TEXT_SECONDARY = "#52514e"
-MUTED = "#898781"
-GRIDLINE = "#e1e0d9"
-SERIES = "#2a78d6"
+# Chart colors: one series color and recessive gray chrome. The light theme is used for the
+# README image and the notebook; the dark one matches the dashboard. Same hues, each stepped
+# for its own background so the contrast holds.
+THEMES = {
+    "light": {"surface": "#fcfcfb", "text": "#0b0b0b", "text_secondary": "#52514e", "muted": "#898781",
+              "grid": "#e1e0d9", "axis": "#c3c2b7", "series": "#2a78d6", "hover_bg": "#ffffff"},
+    "dark": {"surface": "#1a1a19", "text": "#f0efec", "text_secondary": "#c3c2b7", "muted": "#898781",
+             "grid": "#2c2c2a", "axis": "#383835", "series": "#3987e5", "hover_bg": "#0d0d0d"},
+}
 
 
 def load_calibration_data(database_url=DATABASE_URL):
@@ -28,7 +30,7 @@ def load_calibration_data(database_url=DATABASE_URL):
     engine = create_engine(database_url.replace("postgresql://", "postgresql+psycopg://", 1))
     sql = """
         SELECT s.market_id, s.horizon_days, s.price, m.outcome, m.event_id, m.volume_usd,
-               m.platform, m.close_time
+               m.platform, m.close_time, m.question
         FROM snapshots s
         JOIN markets m USING (market_id)
     """
@@ -48,6 +50,18 @@ def load_pipeline_status(database_url=DATABASE_URL):
         "last_success_rows": last_success["row_counts"].iloc[0] if len(last_success) else None,
         "last_run_failed": bool(len(last_run)) and last_run["status"].iloc[0] == "failed",
     }
+
+
+def recent_markets(data, n=15):
+    """The n most recently closed markets, one row each, with their price at every horizon.
+
+    A horizon the market had no snapshot for (e.g. it was open less than 30 days) is left empty.
+    """
+    prices = data.pivot_table(index="market_id", columns="horizon_days", values="price")
+    prices.columns = [f"price_{h}d" for h in prices.columns]
+    info = data.drop_duplicates("market_id").set_index("market_id")[["question", "close_time", "outcome"]]
+    return (info.join(prices).sort_values("close_time", ascending=False).head(n)
+            .reset_index())
 
 
 def describe_age(then, now):
@@ -147,8 +161,12 @@ def scores(data):
     return pd.DataFrame(rows)
 
 
-def calibration_figure(table):
-    """One calibration chart per horizon, side by side, against the perfect-calibration diagonal."""
+def calibration_figure(table, theme="light"):
+    """One calibration chart per horizon, side by side, against the perfect-calibration diagonal.
+
+    Pass a table with a single horizon to get a single chart (the dashboard does this on phones).
+    """
+    c = THEMES[theme]
     horizons = sorted(table["horizon_days"].unique())
     titles = [
         f"{h} day{'s' if h > 1 else ''} before close · {table.loc[table.horizon_days == h, 'markets'].sum():,} markets"
@@ -161,14 +179,14 @@ def calibration_figure(table):
         rows = table[table["horizon_days"] == horizon]
         # Perfect calibration: things priced at X% happen X% of the time
         fig.add_trace(go.Scatter(
-            x=[0, 1], y=[0, 1], mode="lines", line=dict(color=MUTED, width=1),
+            x=[0, 1], y=[0, 1], mode="lines", line=dict(color=c["muted"], width=1),
             hoverinfo="skip", showlegend=False,
         ), row=1, col=col)
         fig.add_trace(go.Scatter(
             x=rows["avg_price"], y=rows["happened_rate"], mode="lines+markers",
-            line=dict(color=SERIES, width=2),
-            marker=dict(size=8, color=SERIES, line=dict(color=SURFACE, width=2)),
-            error_y=dict(type="data", symmetric=False, color=SERIES, thickness=1, width=0,
+            line=dict(color=c["series"], width=2),
+            marker=dict(size=8, color=c["series"], line=dict(color=c["surface"], width=2)),
+            error_y=dict(type="data", symmetric=False, color=c["series"], thickness=1, width=0,
                          array=rows["ci_high"] - rows["happened_rate"],
                          arrayminus=rows["happened_rate"] - rows["ci_low"]),
             customdata=np.column_stack([rows["bin_label"], rows["markets"], rows["ci_low"], rows["ci_high"]]),
@@ -184,19 +202,19 @@ def calibration_figure(table):
     # bottom-right corner (far below the diagonal), where data points don't go
     fig.add_annotation(x=0.8, y=0.8, ax=0.86, ay=0.42, axref="x", ayref="y",
                        text="Perfect calibration", showarrow=True, arrowhead=0, arrowwidth=1,
-                       arrowcolor=MUTED, font=dict(color=TEXT_SECONDARY, size=12), row=1, col=1)
+                       arrowcolor=c["muted"], font=dict(color=c["text_secondary"], size=12), row=1, col=1)
 
-    axis = dict(range=[0, 1], tickformat=".0%", dtick=0.2, gridcolor=GRIDLINE, gridwidth=1,
-                zeroline=False, showline=True, linecolor="#c3c2b7", ticks="",
-                tickfont=dict(color=MUTED))
-    fig.update_xaxes(**axis, title_text="Market price", title_font=dict(color=TEXT_SECONDARY))
+    axis = dict(range=[0, 1], tickformat=".0%", dtick=0.2, gridcolor=c["grid"], gridwidth=1,
+                zeroline=False, showline=True, linecolor=c["axis"], ticks="",
+                tickfont=dict(color=c["muted"]))
+    fig.update_xaxes(**axis, title_text="Market price", title_font=dict(color=c["text_secondary"]))
     fig.update_yaxes(**axis)
-    fig.update_yaxes(title_text="How often it happened", title_font=dict(color=TEXT_SECONDARY), row=1, col=1)
+    fig.update_yaxes(title_text="How often it happened", title_font=dict(color=c["text_secondary"]), row=1, col=1)
     fig.update_layout(
         height=420, margin=dict(l=70, r=20, t=50, b=60),
-        paper_bgcolor=SURFACE, plot_bgcolor=SURFACE,
-        font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=TEXT_PRIMARY, size=13),
-        hoverlabel=dict(bgcolor="white", font_color=TEXT_PRIMARY),
+        paper_bgcolor=c["surface"], plot_bgcolor=c["surface"],
+        font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=c["text"], size=13),
+        hoverlabel=dict(bgcolor=c["hover_bg"], font_color=c["text"]),
     )
     return fig
 

@@ -1,6 +1,9 @@
-# The charts are designed for a light background, so keep the whole app light
+# Dark "trading terminal" look. The chart's dark theme (analysis/calibration.py THEMES["dark"])
+# uses the same colors, so the chart and the page match.
 [theme]
-base = "light"
-primaryColor = "#2a78d6"  # the chart's blue, for filters and toggles
-backgroundColor = "#fcfcfb"
+base = "dark"
+primaryColor = "#3987e5"             # the chart's blue, for buttons, toggles and sliders
+backgroundColor = "#0d0d0d"          # page
+secondaryBackgroundColor = "#1a1a19" # cards, inputs, tables
+textColor = "#f0efec"
 font = "sans-serif"

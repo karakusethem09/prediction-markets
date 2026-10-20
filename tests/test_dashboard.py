@@ -30,15 +30,33 @@ def test_dashboard_runs_and_shows_headline_numbers(app):
     assert len(app.metric) == 4  # markets + one gap per horizon (1, 7, 30 days)
 
 
+def table_with_column(app, column):
+    """The dashboard table that has this column (found by content, not by position on the page)."""
+    return next(df.value for df in app.dataframe if column in df.value.columns)
+
+
 def test_same_markets_is_the_default_and_can_be_switched_off(app):
-    scores = app.dataframe[1].value  # the "Accuracy scores" table
+    scores = table_with_column(app, "brier")  # the "Accuracy scores" table
     assert scores["markets"].nunique() == 1  # by default every horizon uses the same markets
 
     app.toggle[0].set_value(False).run()
 
     assert not app.exception
-    scores = app.dataframe[1].value
+    scores = table_with_column(app, "brier")
     assert scores["markets"].is_monotonic_decreasing  # all markets: fewer at longer horizons
+
+
+def test_horizon_buttons_switch_the_chart(app):
+    for button in ["7D", "30D", "1D"]:
+        app.get("button_group")[0].set_value(button).run()
+        assert not app.exception
+
+
+def test_recently_resolved_lists_the_newest_markets_first(app):
+    recent = table_with_column(app, "result")
+    assert 0 < len(recent) <= 15
+    assert recent["close_time"].is_monotonic_decreasing
+    assert set(recent["result"]) <= {"✓", "✗"}
 
 
 def test_impossible_filter_shows_a_warning_not_an_error(app):
