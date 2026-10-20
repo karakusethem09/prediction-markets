@@ -12,12 +12,18 @@ import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
-from analysis.bootstrap import apply_event_intervals, event_bootstrap
+from fresh_imports import reload_changed_modules
+
+reload_changed_modules()  # Streamlit Cloud keeps old src/ code in memory after a push; see fresh_imports.py
+
+from analysis.bootstrap import apply_event_intervals, event_bootstrap  # noqa: E402
 from analysis.calibration import (
     calibration_figure, calibration_table, filter_snapshots, freshness, load_calibration_data,
     load_pipeline_status, recent_markets, same_markets_only, scores,
 )
-from load.postgres import DATABASE_URL
+from load.postgres import DATABASE_URL  # noqa: E402
+
+reload_changed_modules()  # records which version of each newly imported module is in memory
 
 VOLUME_STEPS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000]
 HORIZON_BUTTONS = {"1D": 1, "7D": 7, "30D": 30}
