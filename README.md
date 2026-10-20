@@ -2,7 +2,7 @@
 
 **[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself. The data updates automatically every day as new markets resolve. *If the app has gone to sleep after a quiet spell, click "Yes, get this app back up!" and give it about 30 seconds.*
 
-[![Daily update](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml/badge.svg)](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml)
+[![Daily update](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml/badge.svg)](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml) [![Tests](https://github.com/karakusethem09/prediction-markets/actions/workflows/tests.yml/badge.svg)](https://github.com/karakusethem09/prediction-markets/actions/workflows/tests.yml)
 
 Every day, people around the world try to predict the future: who will win an election, whether the central bank will cut rates, which team will win on Sunday. On a prediction market they back those predictions with money by buying and selling contracts that pay $1 if the event happens. The market price reflects the prices at which participants are willing to buy and sell those contracts, so it works as the crowd's combined estimate of the probability. A "Yes" share trading at 70 cents means the market thinks there is a 70% chance it will happen.
 
@@ -52,11 +52,26 @@ flowchart LR
 The [live dashboard](https://polymarket-calibration.streamlit.app) reads from a hosted PostgreSQL database ([Supabase](https://supabase.com)) that a [GitHub Actions workflow](.github/workflows/pipeline.yml) keeps up to date:
 
 1. **Every day**, the workflow first runs all the tests against a throwaway PostgreSQL database. If any test fails, nothing is updated.
-2. It then runs [`src/pipeline.py`](src/pipeline.py), which is **incremental**: it downloads the market list, but fetches price history only for markets that resolved since the last run, typically a few dozen instead of 11,000.
-3. Before writing anything, **[data quality checks](src/transform/quality.py)** must all pass: the download isn't suspiciously small, both tables match their schemas (including "no price from after the snapshot time"), and no snapshot lacks its market. If a check fails, nothing is loaded.
+2. It then runs [`src/pipeline.py`](src/pipeline.py), which is **incremental**: it downloads the market list, but fetches price history only for markets that resolved since the last run, typically a few dozen instead of 11,000, plus markets still waiting for their prices (see below).
+3. Before writing anything, **[data quality checks](src/transform/quality.py)** must pass: the download isn't suspiciously small, both tables match their schemas (including "no price from after the snapshot time"), and no snapshot lacks its market. If one of these fails, nothing is loaded. A separate coverage check records what share of possible snapshots was found, without blocking the update.
 4. Every run, successful or not, is logged in a `pipeline_runs` table with row counts, check results and any error. The dashboard shows when the last successful update happened.
 
-The dashboard connects with a read-only database login, and the hosted database blocks access through Supabase's public web API ([`sql/supabase_security.sql`](sql/supabase_security.sql)).
+The dashboard connects with a read-only database login, and the hosted database blocks access through Supabase's public web API ([`sql/supabase_security.sql`](sql/supabase_security.sql)). `python src/load/secure_online_database.py --verify` checks that every table is still locked down.
+
+### Recovering from missing data
+
+Right after a market resolves, its price history is sometimes not available yet. An early version of the pipeline saved such a market anyway, and since it was then "already in the database", it never looked at it again, so its snapshots would never arrive. The pipeline now tracks every market in a `processing_status` table ([`src/transform/completeness.py`](src/transform/completeness.py)):
+
+| Status | Meaning | What the pipeline does |
+|---|---|---|
+| `complete` | Every *possible* snapshot exists | Nothing |
+| `retry_needed` | No price history came back yet | Downloads its prices again on the next daily runs |
+| `unavailable` | Retrying can't help, with a `reason`: the prices don't cover that moment (trading started after the listed open time, or a multi-day gap), or there are still no prices after 7 attempts or 14 days | Stops retrying; this is the list to investigate |
+
+Two design decisions matter here:
+
+- **"Possible" depends on how long the market was open.** A market open for 3 days can never have a 7- or 30-day snapshot, so it is `complete` with just its 1-day one. A horizon counts only if `close_time − horizon ≥ open_time`, the same rule the snapshot step uses.
+- **Only retry when a retry can help.** On the real data, the first version of this rule kept retrying markets whose prices *had* arrived but started a few hours after the listed open time. Those now go straight to `unavailable` with that reason, instead of being downloaded again for a week.
 
 ### Design choices worth knowing
 
@@ -99,7 +114,9 @@ To explore the analysis, open `notebooks/calibration.ipynb` in VS Code or Jupyte
 pytest
 ```
 
-53 tests cover the retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, the incremental pipeline, the database upserts and the calibration math. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database, and are skipped automatically if PostgreSQL isn't running. The same tests run in GitHub Actions before every daily update.
+76 tests cover the API retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, snapshot completeness and retries, the incremental pipeline, the database upserts, the calibration math and the dashboard itself. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database. The dashboard tests run the real Streamlit app against a small synthetic dataset, so they check exact numbers and need no real data.
+
+[GitHub Actions](.github/workflows/tests.yml) runs every test on each push and pull request, and again before every daily update. There, a missing database makes the run fail instead of skipping the database tests, so a green badge means every test actually ran.
 
 ## Project structure
 
