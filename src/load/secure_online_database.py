@@ -3,6 +3,7 @@
 Run once (safe to rerun):  set -a; source .env; set +a; python src/load/secure_online_database.py
 After adding a table, rerun with --keep-password: it applies the rules without changing the
 dashboard's password (a new password would also have to go into the Streamlit secret).
+Check that everything is locked down, without changing anything:  ... secure_online_database.py --verify
 
 Reads SUPABASE_URL from the environment and appends DASHBOARD_DATABASE_URL (the read-only
 login for the public dashboard) to .env. Passwords are never printed.
@@ -22,6 +23,23 @@ ENV_FILE = PROJECT_ROOT / ".env"
 READER = "dashboard_reader"
 
 
+def security_problems(conn):
+    """Every way the database is less locked down than intended. An empty list means all good."""
+    problems = []
+    for (table,) in conn.execute("SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace "
+                                 "AND relkind = 'r' AND NOT relrowsecurity"):
+        problems.append(f"{table}: row level security is off")
+    for grantee, table, privileges in conn.execute(
+            "SELECT grantee, table_name, string_agg(privilege_type, ',') FROM information_schema.role_table_grants "
+            "WHERE table_schema = 'public' AND grantee IN ('anon', 'authenticated') GROUP BY 1, 2"):
+        problems.append(f"{table}: the public web API role {grantee} can {privileges}")
+    for table, privileges in conn.execute(
+            "SELECT table_name, string_agg(privilege_type, ',') FROM information_schema.role_table_grants "
+            "WHERE table_schema = 'public' AND grantee = %s AND privilege_type <> 'SELECT' GROUP BY 1", (READER,)):
+        problems.append(f"{table}: {READER} can {privileges}, but it should only read")
+    return problems
+
+
 def reader_url(admin_url, password):
     """The admin connection URL with the read-only user and password swapped in.
 
@@ -38,8 +56,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lock down the online database.")
     parser.add_argument("--keep-password", action="store_true",
                         help="only apply the security rules; leave dashboard_reader's password as it is")
+    parser.add_argument("--verify", action="store_true", help="only check, change nothing")
     args = parser.parse_args()
     admin_url = os.environ["SUPABASE_URL"]
+
+    if args.verify:
+        with psycopg.connect(admin_url) as conn:
+            problems = security_problems(conn)
+        print("\n".join(problems) if problems else "All tables locked down: RLS on, no web API access, reader is read-only.")
+        raise SystemExit(1 if problems else 0)
 
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(SECURITY_SQL.read_text())

@@ -21,7 +21,10 @@ def db_url():
             conn.execute(f"DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE")
             conn.execute(f"CREATE SCHEMA {TEST_SCHEMA}")
     except psycopg.OperationalError:
-        pytest.skip("PostgreSQL isn't running (start it with: docker compose up -d)")
+        message = "PostgreSQL isn't running (start it with: docker compose up -d)"
+        if os.environ.get("REQUIRE_DATABASE"):  # set in CI: there, a missing database is an error
+            pytest.fail(message)
+        pytest.skip(message)
 
     # search_path makes every unqualified table name (markets, snapshots, ...) point to the test schema
     separator = "&" if "?" in TEST_DATABASE_URL else "?"
