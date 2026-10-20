@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from analysis.calibration import (
-    calibration_table, filter_snapshots, price_bin, same_markets_only, scores, wilson_interval,
+    calibration_table, describe_age, filter_snapshots, price_bin, same_markets_only, scores, wilson_interval,
 )
 
 
@@ -82,3 +82,15 @@ def test_filter_snapshots():
     assert filter_snapshots(data, platforms=["polymarket"])["market_id"].tolist() == ["a", "b"]
     assert filter_snapshots(data, close_years=(2025, 2025))["market_id"].tolist() == ["b", "c"]
     assert len(filter_snapshots(data)) == 3  # no filters: keep everything
+
+
+@pytest.mark.parametrize("seconds_ago, expected", [
+    (20, "just now"),
+    (60, "1 minute ago"),
+    (5 * 3600 + 59, "5 hours ago"),
+    (86_400, "1 day ago"),
+    (3 * 86_400, "3 days ago"),
+])
+def test_describe_age(seconds_ago, expected):
+    now = pd.Timestamp("2026-10-18 12:00", tz="UTC")
+    assert describe_age(now - pd.Timedelta(seconds=seconds_ago), now) == expected

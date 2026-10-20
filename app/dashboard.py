@@ -5,37 +5,61 @@ Run: streamlit run app/dashboard.py   (needs the database: docker compose up -d)
 Uses only the markets and snapshots tables, so it can later run from a small online
 database. Platform names come from the data, never from this code.
 """
+import pandas as pd
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 from analysis.calibration import (
-    calibration_figure, calibration_table, filter_snapshots, load_calibration_data,
-    same_markets_only, scores,
+    calibration_figure, calibration_table, describe_age, filter_snapshots, load_calibration_data,
+    load_pipeline_status, same_markets_only, scores,
 )
+from load.postgres import DATABASE_URL
 
 VOLUME_STEPS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000]
 
 st.set_page_config(page_title="Prediction market calibration", layout="wide")
 
 
-@st.cache_data(ttl=3600)  # read the database at most once an hour, not on every click
-def get_data():
+def database_url():
     # Online (Streamlit Cloud), the read-only database address is stored as a secret.
     # On your own computer there's no secrets file, so use the local database.
     try:
-        return load_calibration_data(st.secrets["DATABASE_URL"])
+        return st.secrets["DATABASE_URL"]
     except (StreamlitSecretNotFoundError, KeyError):
-        return load_calibration_data()
+        return DATABASE_URL
+
+
+@st.cache_data(ttl=3600)  # read the database at most once an hour, not on every click
+def get_data():
+    return load_calibration_data(database_url())
+
+
+@st.cache_data(ttl=600)  # the "last updated" line is cheap, so refresh it more often
+def get_status():
+    return load_pipeline_status(database_url())
 
 
 data = get_data()
 
-st.title("Are prediction-market prices calibrated?")
+st.title("Are prediction market prices calibrated?")
 st.markdown(
     "When a market's price says **70%**, does the event happen about **70%** of the time? "
     "Each dot below groups markets with similar prices. On the diagonal means the prices "
     "were honest probabilities; above it, things happened more often than the price said."
 )
+
+# When the data was last updated, so visitors can see the pipeline is running
+status = get_status()
+if status["last_success_at"] is not None:
+    updated_at = status["last_success_at"]
+    added = (status["last_success_rows"] or {}).get("markets")
+    st.caption(
+        f"Updated automatically every day · last successful update {describe_age(updated_at, pd.Timestamp.now(tz='UTC'))} "
+        f"({updated_at:%b %d, %H:%M} UTC)"
+        + ("" if added is None else f", {added:,} new markets" if added else ", no new markets")
+    )
+if status["last_run_failed"]:
+    st.warning("The most recent update attempt failed, so this shows the data from the last successful update.")
 
 # Filters, in one row
 platform_col, volume_col, years_col, same_col = st.columns(4)

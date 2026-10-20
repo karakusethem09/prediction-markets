@@ -1,0 +1,63 @@
+# Daily update: add newly resolved markets to the online database.
+# Tests run first; the update only runs if they pass. A failed run emails the repository owner.
+name: Daily update
+
+on:
+  schedule:
+    - cron: "17 6 * * *"  # every day at 06:17 UTC (off the hour, when GitHub's queues are quieter)
+  workflow_dispatch:  # adds a "Run workflow" button on the Actions tab
+
+concurrency:
+  group: daily-update  # never run two updates at the same time
+  cancel-in-progress: false
+
+permissions:
+  contents: read  # the workflow only reads the code
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:  # a throwaway database just for the tests
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prediction_markets
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        run: pytest -q
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/prediction_markets
+
+  update:
+    needs: test  # only if every test passed
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Add newly resolved markets
+        run: python src/pipeline.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Keep the raw API responses of this run
+        if: always()  # also when the update failed, to help find out why
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-data-${{ github.run_id }}
+          path: data/raw/
+          retention-days: 14
+          if-no-files-found: ignore
