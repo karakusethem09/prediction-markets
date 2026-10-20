@@ -1,6 +1,8 @@
 # Are Prediction Markets Calibrated?
 
-**[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself.
+**[▶ Explore the live dashboard](https://polymarket-calibration.streamlit.app)**: filter the markets and see the results for yourself. The data updates automatically every day as new markets resolve.
+
+[![Daily update](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml/badge.svg)](https://github.com/karakusethem09/prediction-markets/actions/workflows/pipeline.yml)
 
 Every day, people around the world try to predict the future: who will win an election, whether the central bank will cut rates, which team will win on Sunday. On a prediction market they back those predictions with money by buying and selling contracts that pay $1 if the event happens. The market price reflects the prices at which participants are willing to buy and sell those contracts, so it works as the crowd's combined estimate of the probability. A "Yes" share trading at 70 cents means the market thinks there is a 70% chance it will happen.
 
@@ -41,7 +43,18 @@ flowchart LR
 | Snapshots | [`src/transform/snapshots.py`](src/transform/snapshots.py) | Takes each market's price 1, 7 and 30 days before it closed: the latest price *at or before* that moment, never after, so the result can't leak in. |
 | Load | [`src/load/postgres.py`](src/load/postgres.py) | Upserts everything into PostgreSQL in one transaction (rerunning never duplicates rows) and logs each run. |
 | Analyze | [`src/analysis/calibration.py`](src/analysis/calibration.py) | Price buckets, Wilson confidence intervals, Brier score, Brier skill score and calibration error. |
-| Show | [`app/dashboard.py`](app/dashboard.py) | Interactive Streamlit dashboard with filters for volume, years and platform. |
+| Show | [`app/dashboard.py`](app/dashboard.py) | Interactive Streamlit dashboard with filters for volume, years and platform, and when the data was last updated. |
+
+### Daily updates in production
+
+The [live dashboard](https://polymarket-calibration.streamlit.app) reads from a hosted PostgreSQL database ([Supabase](https://supabase.com)) that a [GitHub Actions workflow](.github/workflows/pipeline.yml) keeps up to date:
+
+1. **Every day**, the workflow first runs all the tests against a throwaway PostgreSQL database. If any test fails, nothing is updated.
+2. It then runs [`src/pipeline.py`](src/pipeline.py), which is **incremental**: it downloads the market list, but fetches price history only for markets that resolved since the last run, typically a few dozen instead of 11,000.
+3. Before writing anything, **[data quality checks](src/transform/quality.py)** must all pass: the download isn't suspiciously small, both tables match their schemas (including "no price from after the snapshot time"), and no snapshot lacks its market. If a check fails, nothing is loaded.
+4. Every run, successful or not, is logged in a `pipeline_runs` table with row counts, check results and any error. The dashboard shows when the last successful update happened.
+
+The dashboard connects with a read-only database login, and the hosted database blocks access through Supabase's public web API ([`sql/supabase_security.sql`](sql/supabase_security.sql)).
 
 ### Design choices worth knowing
 
@@ -71,6 +84,7 @@ docker compose up -d                  # start PostgreSQL
 
 python src/extract/polymarket.py      # download markets + price histories (several hours the first time; safe to stop and resume)
 python src/load/postgres.py           # normalize, take snapshots, load into PostgreSQL (~30 s)
+python src/pipeline.py --with-prices  # later: add only markets resolved since the last run (~1 min)
 
 streamlit run app/dashboard.py        # open the dashboard at http://localhost:8501
 ```
@@ -83,7 +97,7 @@ To explore the analysis, open `notebooks/calibration.ipynb` in VS Code or Jupyte
 pytest
 ```
 
-37 tests cover the retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the database upserts and the calibration math. All HTTP calls are mocked. The database and dashboard tests run against a throwaway schema and are skipped automatically if PostgreSQL isn't running.
+53 tests cover the retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, the incremental pipeline, the database upserts and the calibration math. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database, and are skipped automatically if PostgreSQL isn't running. The same tests run in GitHub Actions before every daily update.
 
 ## Project structure
 
@@ -111,5 +125,3 @@ data/raw/         cached API responses (git-ignored)
 
 - Split the results by topic, to see where the bias in finding 3 comes from.
 - Add [Kalshi](https://kalshi.com) as a second platform. The pipeline is built so that only the extract and normalize steps are platform-specific.
-- Update the online data automatically every day as new markets resolve.
-- A single `pipeline.py` command that runs every step.

@@ -14,9 +14,13 @@ DASHBOARD = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
 @pytest.fixture
 def app():
     try:
-        psycopg.connect(DATABASE_URL, connect_timeout=2).close()
+        with psycopg.connect(DATABASE_URL, connect_timeout=2) as conn:
+            has_data = conn.execute("SELECT to_regclass('snapshots') IS NOT NULL").fetchone()[0] and \
+                conn.execute("SELECT EXISTS (SELECT FROM snapshots)").fetchone()[0]
     except psycopg.OperationalError:
         pytest.skip("PostgreSQL isn't running (start it with: docker compose up -d)")
+    if not has_data:  # e.g. the empty test database in GitHub Actions
+        pytest.skip("The database has no data to show (run src/load/postgres.py first)")
     return AppTest.from_file(str(DASHBOARD), default_timeout=60).run()
 
 

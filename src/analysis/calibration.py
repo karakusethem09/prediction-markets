@@ -35,6 +35,31 @@ def load_calibration_data(database_url=DATABASE_URL):
     return pd.read_sql(sql, engine)
 
 
+def load_pipeline_status(database_url=DATABASE_URL):
+    """When the data was last updated: the latest successful run, and the latest run of any kind
+    (so the dashboard can say so if the most recent update failed)."""
+    engine = create_engine(database_url.replace("postgresql://", "postgresql+psycopg://", 1))
+    last_success = pd.read_sql(
+        "SELECT finished_at, row_counts FROM pipeline_runs WHERE status = 'success' "
+        "ORDER BY finished_at DESC LIMIT 1", engine)
+    last_run = pd.read_sql("SELECT status FROM pipeline_runs ORDER BY started_at DESC LIMIT 1", engine)
+    return {
+        "last_success_at": last_success["finished_at"].iloc[0] if len(last_success) else None,
+        "last_success_rows": last_success["row_counts"].iloc[0] if len(last_success) else None,
+        "last_run_failed": bool(len(last_run)) and last_run["status"].iloc[0] == "failed",
+    }
+
+
+def describe_age(then, now):
+    """A short, human description of how long ago something happened, e.g. '5 hours ago'."""
+    seconds = (now - then).total_seconds()
+    for unit, size in [("day", 86_400), ("hour", 3_600), ("minute", 60)]:
+        if seconds >= size:
+            count = int(seconds // size)
+            return f"{count} {unit}{'s' if count > 1 else ''} ago"
+    return "just now"
+
+
 def filter_snapshots(data, platforms=None, min_volume=0, close_years=None):
     """Keep snapshots of markets on the given platforms, with at least min_volume,
     that closed within close_years (an inclusive (first, last) pair). None means no filter."""
