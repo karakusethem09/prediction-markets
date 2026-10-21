@@ -167,6 +167,23 @@ def collect_updates(existing_market_ids, retry_market_ids=()):
     return normalize_polymarket_updates(existing_market_ids, retry_market_ids)
 
 
+def normalize_polymarket_scheduled_ends(raw_markets):
+    """Each market's scheduled end (its endDate), as known in the raw download. Not stored in the
+    markets table: close_time is when a market actually closed, which can be much earlier or later."""
+    ends = pd.DataFrame({
+        "market_id": pd.Series([f"poly:{m['id']}" for m in raw_markets], dtype=str),
+        "scheduled_end": [m.get("endDate") for m in raw_markets],
+    })
+    ends["scheduled_end"] = to_utc(ends["scheduled_end"], format="ISO8601", errors="coerce")
+    return ends.dropna(subset=["scheduled_end"])
+
+
+def scheduled_end_times():
+    """Every platform's scheduled end times from the latest raw download (read-only)."""
+    latest = sorted(d for d in POLYMARKET_MARKETS_DIR.iterdir() if d.is_dir())[-1]
+    return normalize_polymarket_scheduled_ends(load_markets(latest))
+
+
 if __name__ == "__main__":
     markets, prices = build_normalized_tables(verbose=True)
     print("\nBoth tables pass their schemas.")

@@ -92,3 +92,9 @@ def test_schema_rejects_impossible_values():
     markets.loc[0, "outcome"] = 2
     with pytest.raises(pandera.errors.SchemaError):
         markets_schema.validate(markets)
+
+
+def test_scheduled_ends_come_from_end_date_not_close_time():
+    ends = normalize.normalize_polymarket_scheduled_ends([raw_market("1"), raw_market("2", endDate=None)])
+    assert ends["market_id"].tolist() == ["poly:1"]  # a market without an end date is left out
+    assert ends["scheduled_end"].iloc[0] == pd.Timestamp("2025-12-31", tz="UTC")  # endDate, not closedTime
