@@ -119,8 +119,8 @@ def load_markets_and_prices(database_url=LOCAL_DATABASE_URL):
     with psycopg.connect(database_url) as conn:
         conn.read_only = True
         markets = pd.DataFrame(conn.execute(
-            "SELECT market_id, event_id, question, open_time, close_time, outcome FROM markets").fetchall(),
-            columns=["market_id", "event_id", "question", "open_time", "close_time", "outcome"])
+            "SELECT market_id, event_id, question, open_time, close_time, outcome, volume_usd FROM markets").fetchall(),
+            columns=["market_id", "event_id", "question", "open_time", "close_time", "outcome", "volume_usd"])
         prices = pd.DataFrame(conn.execute("SELECT market_id, time, price, fidelity FROM price_history").fetchall(),
                               columns=["market_id", "time", "price", "fidelity"])
     for frame, columns in [(markets, ["open_time", "close_time"]), (prices, ["time"])]:
@@ -141,9 +141,10 @@ def knowable_entry_candidates(markets, prices, scheduled_ends, horizon_days=HORI
     timed = markets.merge(scheduled_ends, on="market_id")
     moments = timed.assign(close_time=timed["scheduled_end"].dt.as_unit("us"))[["market_id", "open_time", "close_time"]]
     entries = take_snapshots(moments, prices, horizons_days=[horizon_days])
-    entries = entries.merge(timed[["market_id", "event_id", "question", "close_time", "outcome"]], on="market_id")
+    extra = [c for c in ["volume_usd"] if c in timed.columns]  # carried along when available
+    entries = entries.merge(timed[["market_id", "event_id", "question", "close_time", "outcome", *extra]], on="market_id")
     still_open = entries["target_time"] < entries["close_time"]
-    return entries.loc[still_open, ["market_id", "event_id", "question", "close_time", "outcome", "price"]]
+    return entries.loc[still_open, ["market_id", "event_id", "question", "close_time", "outcome", "price", *extra]]
 
 
 # ---------- performance ----------
