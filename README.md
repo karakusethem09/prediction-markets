@@ -26,6 +26,54 @@ If the answer is yes at every price level, the market is **calibrated**: its pri
 
 The full analysis, with the robustness checks and caveats, is in [`notebooks/calibration.ipynb`](notebooks/calibration.ipynb).
 
+## Research: is there a trade in long shots?
+
+The calibration results raise an obvious investor's question: if contracts priced at 20–30 cents win more often than 20–30% of the time, would buying them have made money? I treated this as a research study, not a trading system, and tested it the way a sceptical analyst would: start with the attractive number, then try to break it.
+
+### The trade being tested
+
+Buy one **YES contract** when it trades between **20 and 30 cents** (*Group A*), hold it until the market settles, and collect **$1** if the event happens or **$0** if it doesn't. At an average price of 25 cents, the position breaks even if it wins **25%** of the time; any win rate above that is profit. A second price band, **50–60 cents** (*Group B*), was tested alongside it.
+
+### Step by step
+
+1. **The starting evidence.** The calibration chart showed that, a week before the market closed, contracts in both price bands settled YES more often than their prices implied.
+2. **First test: the 100 most recent trades.** Group A returned **84%** on the capital invested (28 trades) and Group B **13%** (72 trades). Numbers this good from so few trades usually mean luck, so the next step was more data.
+3. **Full history: 992 trades since 2024.** Group A fell to **48%** (372 trades). Group B fell to **2%**, with a range that includes zero: no reliable edge. From here on the research focused on Group A.
+4. **Found and removed a hidden bias.** The entry was timed "7 days before the market *closed*". But many markets close early *because* the event happened, which a trader cannot know in advance. That is a **look-ahead bias**, and it showed: markets that ended early carried a **+19-point** edge, markets that ended on schedule only **+3**. I re-timed every entry to **7 days before the scheduled end date**, which is known in advance, and only counted markets still trading at that moment. Group A: **33%** (390 trades). Group B: **−3%**.
+5. **Stress tests for Group A, with the rules written down before looking at the results.** Every check was run separately on an **earlier period** (before July 2026) and a **later period** kept aside for confirmation:
+   - **Not just sports:** single games and matches returned **29%**, all other markets (politics, crypto, economics) **45%**.
+   - **Liquidity:** stronger in thinner markets (**41%**) than in busier ones (**25%**, with a range that includes zero). This is a warning sign, because thin markets usually cost more to trade.
+   - **Entry timing:** in the earlier period the return was about **24–26%** whether the contract was bought 3, 7 or 14 days before the scheduled end. A real effect shouldn't depend on one exact day.
+6. **Measured the uncertainty honestly.** Several markets can hinge on the same event, so the uncertainty was estimated by resampling whole events, not individual trades. Group A's 95% range is **15% to 52%**: wide, but above zero.
+
+### From inputs to result
+
+| Step | Count |
+|---|---|
+| Resolved markets with at least $1M traded, downloaded from Polymarket | 11,438 |
+| Kept after cleaning (clear final result, open at least a day) | 10,839, backed by 3.1 million price observations |
+| With a usable price 7 days before the *scheduled* end, still trading at that moment | 5,952 |
+| Priced 20–30 cents at that moment (Group A) | **390 trades** from 356 separate events, settling July 2024 – October 2026 |
+| …of which in the earlier period / the later check period | 320 / 70 |
+
+### Result (Group A, one contract per trade)
+
+| | |
+|---|---|
+| Trades | 390 (130 won, 260 lost) |
+| Win rate vs break-even win rate | **33.3%** vs 25.0% |
+| Capital invested / profit | $97.54 / **$32.46** |
+| Return on capital | **33.3%** (95% range: 15% to 52%) |
+| After an assumed 2 cents per contract in trading costs | **23.4%** |
+
+### What this means, and what it doesn't
+
+- **A consistent historical pattern:** long shots priced at 20–30 cents settled YES more often than their price implied. It held across market types, entry days and both time periods.
+- **Not a proven strategy.** The returns use recorded prices, not prices you could actually have bought at. A real buyer pays the asking price, which can be several cents higher, especially in the thin markets where the pattern was strongest. The 20–30 cent band was also chosen after looking at this history, and Polymarket can change a market's scheduled end date while it trades.
+- **The next step before risking money:** historical **order-book data** (bid and ask prices, and how many contracts were available) for Group A trades in busier markets, to see whether the edge survives realistic buying costs.
+
+The full studies, with every table, are in [`docs/combined_yes_strategy.md`](docs/combined_yes_strategy.md) and [`docs/group_a_deep_dive.md`](docs/group_a_deep_dive.md).
+
 ## How it works
 
 ```mermaid
