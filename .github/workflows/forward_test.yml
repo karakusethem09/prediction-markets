@@ -1,0 +1,44 @@
+# Forward test of Group A (docs/forward_test_spec.md): every 3 hours, record markets reaching their
+# 7-day mark with their real order books, and settle the ones that have closed. Paper trades only:
+# this reads public data and writes to the project's own database, nothing else.
+name: Forward test
+
+on:
+  schedule:
+    - cron: "41 */3 * * *"  # every 3 hours at :41 (off the hour, away from the daily update at 06:17)
+  workflow_dispatch:  # adds a "Run workflow" button on the Actions tab
+
+concurrency:
+  group: forward-test  # never two collections at once
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:  # the same tests that run on every push; the collection only runs if they pass
+    uses: ./.github/workflows/tests.yml
+
+  collect:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Record and settle forward-test markets
+        run: python -m forward_test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Keep the raw API responses of this run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forward-test-raw-${{ github.run_id }}
+          path: data/raw/forward_test/
+          retention-days: 14
+          if-no-files-found: ignore

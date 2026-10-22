@@ -41,3 +41,16 @@ DROP POLICY IF EXISTS dashboard_reader_select ON pipeline_runs;
 CREATE POLICY dashboard_reader_select ON pipeline_runs FOR SELECT TO dashboard_reader USING (true);
 DROP POLICY IF EXISTS dashboard_reader_select ON processing_status;
 CREATE POLICY dashboard_reader_select ON processing_status FOR SELECT TO dashboard_reader USING (true);
+
+-- Forward-test tables (sql/forward_test.sql): read-only for the dashboard login, once they exist
+DO $$
+BEGIN
+    IF to_regclass('public.forward_test_entries') IS NOT NULL THEN
+        GRANT SELECT ON forward_test_entries, forward_test_runs TO dashboard_reader;
+        DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_entries;
+        CREATE POLICY dashboard_reader_select ON forward_test_entries FOR SELECT TO dashboard_reader USING (true);
+        DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_runs;
+        CREATE POLICY dashboard_reader_select ON forward_test_runs FOR SELECT TO dashboard_reader USING (true);
+    END IF;
+END
+$$;
