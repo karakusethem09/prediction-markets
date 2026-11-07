@@ -220,7 +220,8 @@ def test_report_waits_for_enough_trades_before_a_verdict(lab_db, fake_collector)
     assert "Verdict: not yet (1 of 100 settled Group A trades needed)" in text
 
 
-def test_each_run_records_its_settings_and_the_volume_floor_is_applied(lab_db, fake_collector):
+def test_each_run_records_its_settings_and_the_volume_floor_is_applied(lab_db, fake_collector, monkeypatch):
+    monkeypatch.delenv("GITHUB_WORKFLOW", raising=False)  # GitHub Actions sets it; outside a workflow it's "local"
     fake_collector["pilot"] = [candidate("big", 20), candidate("small", 20, volume_at_entry=50_000.0)]
     fake_collector["asks"] = {"tok-big": 0.4, "tok-small": 0.4}
     lab.run_collection(lab_db, now=NOW, experiments=["election_2026_pilot"], pilot_min_volume=100_000)
