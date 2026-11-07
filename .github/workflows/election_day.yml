@@ -1,0 +1,45 @@
+# Election pilot, on demand (docs/forward_test_collector.md): one observation run of the election_2026_pilot
+# experiment when started from the Actions tab. Observations only, no paper trades: it reads public data and
+# writes to the project's own database. Independent of forward_test.yml (Group A). It had a 10-minute schedule
+# for 2026-11-03/04, removed unused on 2026-11-07: it was never deployed in time for election day.
+name: Election pilot (manual)
+
+on:
+  workflow_dispatch:  # "Run workflow" button on the Actions tab: one collection right now
+
+concurrency:
+  group: election-day-collector  # never two at once: a second click waits for the first run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # $100,000 floor online (Group A's volume rule): ~550 markets, ~1 MB per run in the database
+      - name: Observe election markets (saves, then reads the run back; fails if anything is missing)
+        run: python -m forward_test --experiment election_2026_pilot --min-volume 100000
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Health check (read-only; fails if no successful pilot run in 30 minutes)
+        if: always()
+        run: python -m forward_test health --experiment election_2026_pilot --stale-minutes 30
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Keep the raw API responses of this run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: election-day-raw-${{ github.run_id }}
+          path: data/raw/forward_test/
+          retention-days: 30
+          if-no-files-found: ignore

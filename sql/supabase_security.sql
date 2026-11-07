@@ -52,5 +52,15 @@ BEGIN
         DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_runs;
         CREATE POLICY dashboard_reader_select ON forward_test_runs FOR SELECT TO dashboard_reader USING (true);
     END IF;
+    -- Migration 002: observations and their evidence (read-only for the dashboard login)
+    IF to_regclass('public.forward_test_observations') IS NOT NULL THEN
+        GRANT SELECT ON forward_test_observations, forward_test_raw, forward_test_migrations TO dashboard_reader;
+        DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_observations;
+        CREATE POLICY dashboard_reader_select ON forward_test_observations FOR SELECT TO dashboard_reader USING (true);
+        DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_raw;
+        CREATE POLICY dashboard_reader_select ON forward_test_raw FOR SELECT TO dashboard_reader USING (true);
+        DROP POLICY IF EXISTS dashboard_reader_select ON forward_test_migrations;
+        CREATE POLICY dashboard_reader_select ON forward_test_migrations FOR SELECT TO dashboard_reader USING (true);
+    END IF;
 END
 $$;
