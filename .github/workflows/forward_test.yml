@@ -30,8 +30,13 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Record and settle forward-test markets
-        run: python -m forward_test
+      - name: Record and settle Group A markets (the frozen test, in a run of its own)
+        run: python -m forward_test --experiment group_a_7day
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Observe election markets (separate pilot; a failure here can't affect the Group A step)
+        if: always()
+        run: python -m forward_test --experiment election_2026_pilot --min-volume 100000
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Keep the raw API responses of this run

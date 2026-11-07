@@ -25,9 +25,19 @@ HOURLY_WINDOW_DAYS = 15  # the longest window the API allows for hourly prices
 session = requests.Session()
 
 def get_with_retry(url, params, max_retries=5):
+    return request_with_retry(lambda: session.get(url, params=params, timeout=30), url, max_retries)
+
+
+def post_with_retry(url, body, max_retries=5):
+    """POST a JSON body, with the same retry rules as get_with_retry."""
+    return request_with_retry(lambda: session.post(url, json=body, timeout=30), url, max_retries)
+
+
+def request_with_retry(send, url, max_retries=5):
+    """Call send() until it works: back off on 429, 5xx and network errors; never retry other 4xx."""
     for attempt in range(max_retries):
         try:
-            response = session.get(url, params=params,  timeout=30)
+            response = send()
         except (requests.ConnectionError , requests.Timeout):
             response = None
 

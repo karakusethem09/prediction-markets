@@ -17,12 +17,24 @@ Re-running is safe: a market is recorded once and never overwritten. Every raw A
 
 ## Running it
 
-| Where | Command |
+The schema is never changed by a collection. Apply migrations on purpose first; a collection refuses to run until they are applied.
+
+| What | Command |
 |---|---|
-| Automatically | GitHub Actions, [`.github/workflows/forward_test.yml`](../.github/workflows/forward_test.yml), every 3 hours at :41. The tests run first. The online database address comes from the repository secret `DATABASE_URL`. |
-| By hand, online | GitHub → **Actions** → **Forward test** → **Run workflow** |
-| Locally (local database) | `python -m forward_test` |
-| Locally, online database | `set -a; source .env; set +a` then `DATABASE_URL="$SUPABASE_URL" python -m forward_test` |
+| Apply migrations (once per database; safe to repeat) | `python -m forward_test migrate` |
+| Dry run: everything except saving (no database changes, no files) | `python -m forward_test --dry-run --limit 5` |
+| One real collection, both experiments | `python -m forward_test` |
+| Only one experiment | `python -m forward_test --experiment election_2026_pilot` (or `group_a_7day`) |
+| Fewer markets, for local testing | `--limit N` (at most N markets per experiment, and N settlement checks) |
+| Against the online database | `set -a; source .env; set +a` then prefix any command with `DATABASE_URL="$SUPABASE_URL"` |
+| Election pilot with a higher volume floor | `python -m forward_test --experiment election_2026_pilot --min-volume 100000` |
+| Is it running? | `python -m forward_test health` (add `--experiment election_2026_pilot --stale-minutes 30` to check one experiment; exit code 1 if stale or the latest run failed) |
+| Automatically | GitHub Actions, [`.github/workflows/forward_test.yml`](../.github/workflows/forward_test.yml), every 3 hours at :41 (GitHub often starts scheduled runs late: 2–9 hours apart in practice). Group A and the pilot run as separate steps, so a pilot failure can't block Group A. |
+| Election pilot, on demand | [`.github/workflows/election_day.yml`](../.github/workflows/election_day.yml): one run when started with **Run workflow** (its Nov 3–4 schedule was removed unused). Pilot only, markets ≥ $100,000. |
+
+**Storage:** at the default $10,000 floor a pilot run observes ~2,170 markets and adds about 3.4 MB to the database: observation rows ~2.3 MB, plus the books that changed, ~1.1 MB (on election day almost every book changes between runs). Market metadata and rule texts are stored only when they change. At the $100,000 floor used online it's ~550 markets and about 1 MB. Raw files (gzip) are kept under `data/raw/forward_test/` and in the run's artifact.
+
+After every save the collector reads the run back in a new session. If any observation, or its link to an archived book, is missing, the run is logged as **failed**.
 
 ## Checking on it
 
@@ -43,8 +55,8 @@ Re-running is safe: a market is recorded once and never overwritten. Every raw A
 - GitHub also pauses scheduled workflows after 60 days without commits to the repository; re-enable them the same way.
 - **Stop for good:** disable the workflow. The recorded data stays in the database for the report.
 
-## Online setup (once)
+## Online setup and upgrades
 
-1. Run the collector once against the online database. That creates the two `forward_test_*` tables, with row level security on.
-2. Apply the security rules without changing the dashboard's password: `python src/load/secure_online_database.py --keep-password`. Then check them with `--verify`.
-3. Enable the workflow (it is active once the file is on GitHub).
+1. **Apply the migration** to the online database: `DATABASE_URL="$SUPABASE_URL" python -m forward_test migrate`. It only adds tables, columns and rules; existing rows are kept.
+2. **Apply the security rules** without changing the dashboard's password: `python src/load/secure_online_database.py --keep-password`, then `--verify`.
+3. **Then push the new code.** The workflow runs whatever code is on GitHub; until the code that matches the migration is pushed, it keeps running the previous version.
