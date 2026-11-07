@@ -1,0 +1,11 @@
+split,subgroup,positions,settled,wins,win_rate,avg_price,gross_roi
+category,Crypto,1,1,0,0.0,0.27,-1.0
+category,Elections,10,8,1,0.125,0.238625,-0.47616553169198533
+category,Other,2,1,0,0.0,0.289,-1.0
+category,Sports,7,7,1,0.14285714285714285,0.2414285714285714,-0.40828402366863903
+election vs other,election markets,10,8,1,0.125,0.238625,-0.47616553169198533
+election vs other,other markets,10,9,1,0.1111111111111111,0.24988888888888885,-0.555357936860827
+volume,volume at entry < median,10,9,1,0.1111111111111111,0.23422222222222222,-0.52561669829222
+volume,volume at entry >= median,10,8,1,0.125,0.25625,-0.5121951219512195
+spread at entry,spread <= 1 cent,16,13,2,0.15384615384615385,0.23915384615384616,-0.35670633644258604
+spread at entry,spread > 1 cent,4,4,0,0.0,0.26225,-1.0
