@@ -92,6 +92,7 @@ def status_pill(fresh):
 data = get_data()
 
 st.title("Are prediction market prices calibrated?")
+st.page_link("pages/forward_test_election_2026.py", label="Forward Test — Election 2026: paper trades at real quotes →")
 # Data freshness, always shown: LIVE, STALE, UPDATE FAILED or NO UPDATES YET (rule in analysis.freshness)
 status = get_status()
 fresh = freshness(status, pd.Timestamp.now(tz="UTC"))

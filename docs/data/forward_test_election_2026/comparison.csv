@@ -1,0 +1,7 @@
+measure,forward_test,historical
+Win rate,0.11764705882352941,0.333
+Average entry price,0.2445882352941176,0.25
+Edge (win rate - average price),-0.1269411764705882,0.083
+"Gross ROI, one contract each",-0.518999518999519,0.333
+Settled positions,17.0,390.0
+Distinct events,17.0,356.0
