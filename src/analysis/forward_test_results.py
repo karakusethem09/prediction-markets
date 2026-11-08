@@ -9,18 +9,20 @@ Sources (all read-only):
   - the online forward-test tables, forward_test_runs and forward_test_entries: the official test
   - each Group A position's official result, matched by its exact outcome token (collector.official_resolution)
   - the raw order books in the collector's GitHub artifacts, saved locally (ARTIFACTS_DIR)
-  - the forward-test workflow's run history, from GitHub's public API
+  - the forward-test workflow's run history, and its schedule at each run's commit, from GitHub's public API
   - the local election-pilot observations (local database): described only, the pilot has no trades
 Writes the results bundle in RESULTS_DIR (read by the dashboard page) and two reports:
 docs/election_2026_data_audit.md and docs/election_2026_forward_test_results.md.
 
     set -a; source .env; set +a
-    DATABASE_URL="$SUPABASE_URL" python src/analysis/forward_test_results.py
+    DATABASE_URL="$DASHBOARD_DATABASE_URL" python src/analysis/forward_test_results.py   # the read-only login
 """
+import base64
 import glob
 import json
 import math
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,7 +44,8 @@ ARTIFACTS_DIR = PROJECT_ROOT / "data" / "raw" / "forward_test" / "github_artifac
 LOCAL_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/prediction_markets"
 GITHUB_RUNS_URL = ("https://api.github.com/repos/karakusethem09/prediction-markets/actions/workflows/"
                    "forward_test.yml/runs")
-CRON_EVERY = pd.Timedelta(hours=3)  # forward_test.yml: "41 */3 * * *"
+WORKFLOW_FILE_URL = ("https://api.github.com/repos/karakusethem09/prediction-markets/contents/"
+                     ".github/workflows/forward_test.yml")  # with ?ref=<commit>: the file as it was then
 
 # docs/group_a_deep_dive.md, "7 days before, all": retrospective, recorded (not executable) prices
 HISTORICAL = {"markets": 390, "events": 356, "win_rate": 0.333, "avg_price": 0.250, "edge": 0.083,
@@ -262,15 +265,36 @@ def period(timestamp):
     return "Nov 3" if timestamp < ELECTION_DAY + pd.Timedelta(days=1) else "after Nov 3"
 
 
-def scheduled_slots(first, last, every=CRON_EVERY, minute=41):
-    """How many cron slots ("<minute> */3 * * *") the runs between two moments were for. GitHub queues a
-    scheduled run after its slot (often hours later), so counting starts at the last slot at or before
-    the first run, the one it served."""
+def scheduled_slots(first, last, every_hours=3, minute=41):
+    """How many cron slots ("<minute> */<every_hours> * * *") the runs between two moments were for. GitHub
+    queues a scheduled run after its slot (often hours later), so counting starts at the last slot at or
+    before the first run, the one it served."""
     start = first.floor("h") + pd.Timedelta(minutes=minute)
     start = start if start <= first else start - pd.Timedelta(hours=1)
-    while start.hour % 3:
+    while start.hour % every_hours:
         start -= pd.Timedelta(hours=1)
-    return len(pd.date_range(start, last, freq=every))
+    return len(pd.date_range(start, last, freq=pd.Timedelta(hours=every_hours)))
+
+
+def cron_hours(cron):
+    """Hours between the slots of a "<minute> */<hours> * * *" cron, the only form forward_test.yml uses."""
+    match = re.fullmatch(r"\d+ \*/(\d+) \* \* \*", cron.strip())
+    if not match:
+        raise ValueError(f"can't count slots for cron {cron!r}: expected '<minute> */<hours> * * *'")
+    return int(match.group(1))
+
+
+def schedule_segments(github_runs):
+    """The scheduled runs, grouped by the schedule they were made from (every_hours), in time order. Each
+    segment's slots run from the one its first run served to its last run; slots between two schedules,
+    around a change, aren't counted."""
+    scheduled = github_runs[github_runs["event"] == "schedule"].sort_values("created_at")
+    segment = (scheduled["every_hours"] != scheduled["every_hours"].shift()).cumsum()
+    return [{"every_hours": int(runs["every_hours"].iloc[0]),
+             "first_run": runs["created_at"].min(), "last_run": runs["created_at"].max(),
+             "scheduled_runs": len(runs),
+             "slots": scheduled_slots(runs["created_at"].min(), runs["created_at"].max(), int(runs["every_hours"].iloc[0]))}
+            for _, runs in scheduled.groupby(segment)]
 
 
 def analyze(entries, runs, resolutions, raw_checks, github_runs, pilot, as_of, n_boot=N_BOOT):
@@ -282,6 +306,7 @@ def analyze(entries, runs, resolutions, raw_checks, github_runs, pilot, as_of, n
     recorded = entries[entries["status"] != "missed"]
     missed = missed_check(entries, success)
     gh = github_runs
+    schedules = schedule_segments(gh) if len(gh) else []
     one = scenarios.get("1 contract")
     subgroups = []
     if one is not None and len(one):
@@ -302,7 +327,8 @@ def analyze(entries, runs, resolutions, raw_checks, github_runs, pilot, as_of, n
         "github_scheduled_runs": int((gh["event"] == "schedule").sum()) if len(gh) else 0,
         "github_failed_runs": int((gh["conclusion"] == "failure").sum()) if len(gh) else 0,
         "github_failed_times": [t.isoformat() for t in gh.loc[gh["conclusion"] == "failure", "created_at"]] if len(gh) else [],
-        "cron_slots": scheduled_slots(gh["created_at"].min(), gh["created_at"].max()) if len(gh) else 0,
+        "schedules": schedules,
+        "cron_slots": sum(s["slots"] for s in schedules),
         "median_gap_hours": success.sort_values().diff().dt.total_seconds().median() / 3600 if len(success) > 1 else np.nan,
         "max_gap_hours": success.sort_values().diff().dt.total_seconds().max() / 3600 if len(success) > 1 else np.nan,
         "entries": len(entries), "entry_status": entries["status"].value_counts().to_dict(),
@@ -386,9 +412,21 @@ def load_github_runs():
     folder = PROJECT_ROOT / "data" / "raw" / "forward_test" / "audit"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"github_runs_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json").write_text(json.dumps(runs))
+    every_hours = {sha: workflow_cron_hours(sha, folder) for sha in {r["head_sha"] for r in runs}}
     frame = pd.DataFrame([{"github_run_id": r["id"], "created_at": pd.Timestamp(r["created_at"]), "event": r["event"],
-                           "conclusion": r["conclusion"]} for r in runs])
+                           "conclusion": r["conclusion"], "every_hours": every_hours[r["head_sha"]]} for r in runs])
     return frame.sort_values("created_at").reset_index(drop=True)
+
+
+def workflow_cron_hours(sha, folder):
+    """The slot interval of forward_test.yml at one commit. A scheduled run is made from the default branch's
+    latest commit (its head_sha), so this is the schedule it served. Raw response saved once: a commit's
+    file never changes."""
+    path = folder / f"forward_test_yml_{sha}.json"
+    if not path.exists():
+        path.write_text(json.dumps(get_with_retry(WORKFLOW_FILE_URL, {"ref": sha})))
+    text = base64.b64decode(json.loads(path.read_text())["content"]).decode()
+    return cron_hours(re.search(r'cron:\s*"([^"]+)"', text).group(1))
 
 
 def raw_book_checks(positions_entries, runs, github_runs):
@@ -553,7 +591,7 @@ def main():
     from analysis.forward_test_report import audit_markdown, results_markdown  # imports helpers from here
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        raise SystemExit("Set DATABASE_URL to the online database (read-only use), e.g. DATABASE_URL=\"$SUPABASE_URL\"")
+        raise SystemExit("Set DATABASE_URL to the online database's read-only login: DATABASE_URL=\"$DASHBOARD_DATABASE_URL\"")
     as_of = pd.Timestamp.now(tz="UTC")
     results = analyze(*load_inputs(database_url), as_of=as_of)
     write_bundle(results)

@@ -28,11 +28,14 @@ The schema is never changed by a collection. Apply migrations on purpose first; 
 | Fewer markets, for local testing | `--limit N` (at most N markets per experiment, and N settlement checks) |
 | Against the online database | `set -a; source .env; set +a` then prefix any command with `DATABASE_URL="$SUPABASE_URL"` |
 | Election pilot with a higher volume floor | `python -m forward_test --experiment election_2026_pilot --min-volume 100000` |
-| Is it running? | `python -m forward_test health` (add `--experiment election_2026_pilot --stale-minutes 30` to check one experiment; exit code 1 if stale or the latest run failed) |
-| Automatically | GitHub Actions, [`.github/workflows/forward_test.yml`](../.github/workflows/forward_test.yml), every 3 hours at :41 (GitHub often starts scheduled runs late: 2–9 hours apart in practice). Group A and the pilot run as separate steps, so a pilot failure can't block Group A. |
-| Election pilot, on demand | [`.github/workflows/election_day.yml`](../.github/workflows/election_day.yml): one run when started with **Run workflow** (its Nov 3–4 schedule was removed unused). Pilot only, markets ≥ $100,000. |
+| Is it healthy? | `python -m forward_test health`: Group A only by default (`--experiment election_2026_pilot --stale-minutes 30` checks the pilot instead). Exit code 1 on any problem, see [Checking on it](#checking-on-it). Add `--storage-limit-mb 0` on the local database, which has no size limit |
+| Automatically | GitHub Actions, [`.github/workflows/forward_test.yml`](../.github/workflows/forward_test.yml): **Group A only, every 12 hours** (`41 */12 * * *`: 00:41 and 12:41 UTC; every 3 hours until 2026-11-07), then the health check. GitHub starts scheduled runs late (6.7 h on median for the daily update) and skipped 55% of the 3-hourly slots. |
+| Election pilot, on demand | [`.github/workflows/election_day.yml`](../.github/workflows/election_day.yml): one run when started with **Run workflow** (its Nov 3–4 schedule was removed unused, and the 3-hourly pilot step on 2026-11-07). Pilot only, markets ≥ $100,000. |
 
-**Storage:** at the default $10,000 floor a pilot run observes ~2,170 markets and adds about 3.4 MB to the database: observation rows ~2.3 MB, plus the books that changed, ~1.1 MB (on election day almost every book changes between runs). Market metadata and rule texts are stored only when they change. At the $100,000 floor used online it's ~550 markets and about 1 MB. Raw files (gzip) are kept under `data/raw/forward_test/` and in the run's artifact.
+**Storage**, measured online on 2026-11-07:
+- **A Group A run** adds about 65 kB (the market list and the settlement checks), plus about 2 kB for each market it enters (about 23 a day, whatever the schedule). At 2 runs a day that's about 0.2 MB a day, or 6 MB a month.
+- **A pilot run** at the $100,000 floor observes about 320 markets and adds about 0.7 MB: observation rows about 0.43 MB, plus the books that changed. At the default $10,000 floor (local) it's about 2,170 markets and 3.4 MB.
+- Market metadata and rule texts are stored only when they change. Raw files (gzip) are kept under `data/raw/forward_test/` and in the run's artifact.
 
 After every save the collector reads the run back in a new session. If any observation, or its link to an archived book, is missing, the run is logged as **failed**.
 
@@ -45,9 +48,38 @@ After every save the collector reads the run back in a new session. If any obser
   - once trades settle, the win rate and the return at the asking price and at the $100 / $1,000 fill prices.
   
   The spec's verdict appears only once **100 Group A trades** have settled.
-- **Run history:** the `forward_test_runs` table (status, markets entered / missed / settled, any error), or the Actions tab. GitHub emails the repository owner when a scheduled run fails.
+- **Health:** `python -m forward_test health` runs at the end of every scheduled run (read-only). It fails the run, and GitHub emails the repository owner, if:
+  - **the latest run failed**;
+  - **Group A is stale:** no successful run for 22 hours (the 12-hour schedule plus up to 10 hours of GitHub delay). Run by hand, this flags a collector that has stopped;
+  - **an entry window was missed:** the gap before the latest successful run was longer than 24 hours, so markets whose 7-day mark fell in it got no run in their window. The run after a gap fails once; the total count of such gaps stays in every report;
+  - **storage is nearly full:** the database is over 80% of Supabase's 500 MB free tier. Each report shows the size, the largest tables and the forward-test tables' growth over the last 7 days.
+- **Run history:** the `forward_test_runs` table (status, markets entered / missed / settled, any error), or the Actions tab.
 - **Raw responses of an online run:** download the `forward-test-raw-<run id>` file from the run's page (kept 14 days).
-- **Missed markets** mean the collector didn't run for over a day. A few are harmless; many mean the schedule stopped.
+- **Missed markets** mean no successful run happened in the first day after their 7-day mark. With runs 12 hours apart, one skipped slot can be enough. A few are harmless; many mean the schedule stopped.
+- **If storage runs low:** the forward-test tables are append-only by design, so nothing is deleted automatically. The options are a larger Supabase plan, or a reviewed, deliberate clean-up (e.g. moving old raw evidence to files). Decide before the database becomes read-only, which would also stop the daily calibration update.
+
+## Updating the published results (weekly)
+
+The website's **Forward Test — Election 2026** page reads only the committed bundle in `docs/data/forward_test_election_2026/`. It never reads the database. Updating it is a manual, reviewed step, never automatic:
+
+1. **Start from the latest code:** `git checkout main && git pull`, then `git checkout -b results/<date>`.
+2. **Save the new runs' raw files** before GitHub deletes them (14 days), so quotes can be re-checked against the raw order books:
+   ```bash
+   for id in $(gh run list --workflow forward_test.yml --status success --limit 40 --json databaseId --jq '.[].databaseId'); do
+     [ -d data/raw/forward_test/github_artifacts/$id ] || gh run download $id -n forward-test-raw-$id -D data/raw/forward_test/github_artifacts/$id
+   done
+   ```
+3. **Start the local database** (`docker compose up -d`): the pilot section reads the local election observations.
+4. **Regenerate with the read-only login.** It reads the database and the public APIs, writes no rows, and rewrites the bundle and both reports (`docs/election_2026_*.md`):
+   ```bash
+   set -a; source .env; set +a
+   DATABASE_URL="$DASHBOARD_DATABASE_URL" python src/analysis/forward_test_results.py
+   ```
+5. **Check it:** `pytest tests/test_forward_test_results.py tests/test_dashboard_forward_test.py`, then `git diff --stat docs/` and read the changed lines of both reports. A week normally adds a few positions or settlements and moves the as-of time. Look again if old positions changed, the verdict changed, or a new gap or missed market appears.
+6. **Preview it:** `streamlit run app/dashboard.py`, then open the forward-test page.
+7. **Commit and publish only after review:** commit the bundle and the two reports on the branch, then merge into `main` and push. Streamlit Cloud redeploys from `main`.
+
+Weekly is enough: positions settle over days, and the raw files last 14 days.
 
 ## Pausing and stopping
 

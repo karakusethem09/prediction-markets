@@ -9,9 +9,10 @@ Two experiments, stored separately and never combined:
     python -m forward_test                              # one real collection
     python -m forward_test --experiment election_2026_pilot --min-volume 100000
     python -m forward_test report                       # results so far
-    python -m forward_test health                       # is the collector running? (exit code 1 if stale)
+    python -m forward_test health                       # is Group A being collected? (exit code 1 on any problem)
 
-Uses DATABASE_URL (the local database if not set). GitHub Actions runs a collection every 3 hours.
+Uses DATABASE_URL (the local database if not set). GitHub Actions runs a Group A collection every 12 hours
+(.github/workflows/forward_test.yml); the election pilot runs only on demand (election_day.yml).
 """
 import argparse
 import os
@@ -24,8 +25,8 @@ import requests
 from analysis.combined_yes_strategy import event_bootstrap, money, one_share_performance, pct
 from forward_test import collector
 from forward_test.models import (
-    FILL_SIZES, FIRST_POLL_CLOSE, PILOT_MIN_VOLUME, book_depth, book_summary, classify_event, entry_decision,
-    fill_price, in_group_a, is_stale, meets_group_a_volume, settlement, validate_book,
+    ENTRY_WINDOW, FILL_SIZES, FIRST_POLL_CLOSE, PILOT_MIN_VOLUME, book_depth, book_summary, classify_event,
+    collection_gaps, entry_decision, fill_price, in_group_a, is_stale, meets_group_a_volume, settlement, validate_book,
 )
 from forward_test.storage import (
     finish_run, health, load_entries, migrate, open_market_ids, recorded_market_ids, save, saved_counts, start_run,
@@ -34,7 +35,17 @@ from forward_test.storage import (
 from load.postgres import DATABASE_URL
 
 EXPERIMENTS = ["group_a_7day", "election_2026_pilot"]
+SCHEDULED = ["group_a_7day"]  # what forward_test.yml collects (the pilot only on demand since 2026-11-07)
 TRADES_FOR_A_VERDICT = 100  # the spec's decision rule is applied once this many Group A trades have settled
+
+# Health thresholds. forward_test.yml runs every 12 hours, and GitHub starts scheduled runs late: the daily
+# update started a median of 6.7 h and at most 9.7 h after its slot (Oct 21 - Nov 6, 2026)
+SCHEDULE_EVERY = timedelta(hours=12)
+GITHUB_DELAY = timedelta(hours=10)
+STALE_AFTER = SCHEDULE_EVERY + GITHUB_DELAY  # 22 h: just before a gap starts costing markets (ENTRY_WINDOW, 24 h)
+MB = 1024 ** 2
+STORAGE_LIMIT_MB = 500  # Supabase's free-tier database size; above it the database becomes read-only
+STORAGE_WARN_SHARE = 0.8
 
 
 def connect(database_url, attempts=3, **kwargs):
@@ -248,9 +259,13 @@ def report(entries):
     return "\n".join(lines)
 
 
-def health_report(h, now, max_age, experiments=tuple(EXPERIMENTS)):
+def health_report(h, now, max_age, experiments=tuple(SCHEDULED), storage_limit_bytes=None):
     """Plain-text health check from storage.health(). Returns (text, healthy).
-    Only the listed experiments are judged stale or not (each workflow checks its own)."""
+
+    Unhealthy if the latest run failed, a listed experiment is stale, the gap before Group A's latest
+    successful run was longer than the entry window (markets may have been missed), or the database is
+    over STORAGE_WARN_SHARE of storage_limit_bytes (None: no storage check). Only the listed experiments
+    are judged (each workflow checks its own)."""
     utc = "%Y-%m-%d %H:%M:%S UTC"
     runs, latest = h["runs"], h["latest_run"]
     lines = [f"Forward-test health at {now:{utc}} (stale after {max_age})",
@@ -268,6 +283,17 @@ def health_report(h, now, max_age, experiments=tuple(EXPERIMENTS)):
         healthy = healthy and not stale
         lines.append(f"{experiment}: last successful run {f'{last:{utc}}' if last else 'never'}"
                      f" -> {('STALE' if stale else 'OK') if checked else 'not checked'}")
+        if experiment == "group_a_7day" and checked:
+            gaps = collection_gaps(h["success_times"].get(experiment, []))
+            # A gap that ends at the latest run is new: this check fails once for it; older gaps stay listed
+            new_gap = bool(gaps) and gaps[-1][1] == last
+            healthy = healthy and not new_gap
+            line = f"  Gaps longer than the {ENTRY_WINDOW.total_seconds() / 3600:.0f} h entry window: {len(gaps)}"
+            if gaps:
+                line += f"; latest {gaps[-1][0]:{utc}} -> {gaps[-1][1]:{utc}}"
+            if new_gap:
+                line += " -> MISSED WINDOW: markets whose 7-day mark fell in it could not be entered"
+            lines.append(line)
         obs = h["observations"].get(experiment)
         if obs:
             lines.append(f"  Observations: {obs['observations']:,} ({obs['valid']:,} valid books, {obs['invalid']:,} invalid); "
@@ -283,6 +309,20 @@ def health_report(h, now, max_age, experiments=tuple(EXPERIMENTS)):
                  f"Group A trades: {h['group_a_entries']}")
     lines.append(f"  Missed opportunities: {entries.get('missed', 0)} labelled missed, of which "
                  f"{h['missed_confirmed']} confirmed (no successful run in their first day after the 7-day mark)")
+    storage = h["storage"]
+    size, week = storage["database_bytes"], storage["forward_test_week_bytes"]
+    line = f"Storage: database {size / MB:,.0f} MB"
+    if storage_limit_bytes:
+        line += f" of {storage_limit_bytes / MB:,.0f} MB ({size / storage_limit_bytes:.0%})"
+    line += f"; forward-test tables grew ~{week / MB:,.1f} MB in the last 7 days"
+    if storage_limit_bytes and week > 0 and size < storage_limit_bytes:
+        line += f" (at that rate the limit is ~{(storage_limit_bytes - size) / (week / 7):,.0f} days away)"
+    lines.append(line)
+    lines.append("  Largest tables: " + ", ".join(f"{name} {n / MB:,.1f} MB" for name, n in storage["largest_tables"]))
+    if storage_limit_bytes and size >= STORAGE_WARN_SHARE * storage_limit_bytes:
+        healthy = False
+        lines.append(f"  WARNING: over {STORAGE_WARN_SHARE:.0%} of the limit. Free space or move to a larger plan "
+                     "before the database becomes read-only (see docs/forward_test_collector.md)")
     return "\n".join(lines), healthy
 
 
@@ -291,11 +331,15 @@ if __name__ == "__main__":
     parser.add_argument("command", nargs="?", choices=["collect", "report", "migrate", "health"], default="collect")
     parser.add_argument("--dry-run", action="store_true", help="do everything except saving: no database changes, no files")
     parser.add_argument("--limit", type=int, help="process at most this many markets per experiment (local testing)")
-    parser.add_argument("--experiment", choices=EXPERIMENTS + ["all"], default="all")
+    parser.add_argument("--experiment", choices=EXPERIMENTS + ["all"],
+                        help="default: all experiments for a collection; for health, the scheduled ones (group_a_7day)")
     parser.add_argument("--min-volume", type=float, default=PILOT_MIN_VOLUME,
                         help="election pilot: only markets with at least this much traded (default %(default)s)")
-    parser.add_argument("--stale-minutes", type=float, default=12 * 60,
-                        help="health: an experiment with no successful run for this long is STALE")
+    parser.add_argument("--stale-minutes", type=float, default=STALE_AFTER.total_seconds() / 60,
+                        help="health: an experiment with no successful run for this long is STALE (default %(default)s)")
+    parser.add_argument("--storage-limit-mb", type=float, default=STORAGE_LIMIT_MB,
+                        help="health: warn above 80%% of this database size (default %(default)s, Supabase's free "
+                             "tier; 0 turns the check off, e.g. for the local database)")
     args = parser.parse_args()
     if args.command == "migrate":
         with connect(DATABASE_URL, autocommit=True) as conn:
@@ -306,12 +350,13 @@ if __name__ == "__main__":
     elif args.command == "health":
         with connect(DATABASE_URL) as conn:
             conn.read_only = True
+            checked = {None: SCHEDULED, "all": EXPERIMENTS}.get(args.experiment, [args.experiment])
             text, healthy = health_report(health(conn), collector.utc_now(), timedelta(minutes=args.stale_minutes),
-                                          EXPERIMENTS if args.experiment == "all" else [args.experiment])
+                                          checked, storage_limit_bytes=args.storage_limit_mb * MB or None)
         print(text)
         raise SystemExit(0 if healthy else 1)
     else:
-        chosen = EXPERIMENTS if args.experiment == "all" else [args.experiment]
+        chosen = EXPERIMENTS if args.experiment in (None, "all") else [args.experiment]
         try:
             run_collection(dry_run=args.dry_run, limit=args.limit, experiments=chosen,
                            pilot_min_volume=args.min_volume)

@@ -147,14 +147,17 @@ def health(conn):
     latest_failure = conn.execute(
         "SELECT run_id, started_at, error FROM forward_test_runs WHERE status = 'failed' "
         "ORDER BY run_id DESC LIMIT 1").fetchone()
-    # Runs logged before 2026-11-03 have no settings: their experiments are the ones they saved observations
-    # for, and runs without any observations (all online runs before migration 002) ran the Group A test
-    last_success = dict(conn.execute(
-        "SELECT x.experiment, max(r.started_at) FROM forward_test_runs r CROSS JOIN LATERAL "
-        "  jsonb_array_elements_text(coalesce(r.settings -> 'experiments', "
-        "    (SELECT jsonb_agg(DISTINCT o.experiment) FROM forward_test_observations o WHERE o.run_id = r.run_id), "
-        "    '[\"group_a_7day\"]')) AS x(experiment) "
-        "WHERE r.status = 'success' GROUP BY x.experiment").fetchall())
+    # Each successful run's experiments. Runs logged before 2026-11-03 have no settings: their experiments are the
+    # ones they saved observations for, and runs without any (all online runs before migration 002) ran Group A
+    success_times = {}
+    for experiment, started_at in conn.execute(
+            "SELECT x.experiment, r.started_at FROM forward_test_runs r CROSS JOIN LATERAL "
+            "  jsonb_array_elements_text(coalesce(r.settings -> 'experiments', "
+            "    (SELECT jsonb_agg(DISTINCT o.experiment) FROM forward_test_observations o WHERE o.run_id = r.run_id), "
+            "    '[\"group_a_7day\"]')) AS x(experiment) "
+            "WHERE r.status = 'success' ORDER BY r.started_at"):
+        success_times.setdefault(experiment, []).append(started_at)
+    last_success = {experiment: times[-1] for experiment, times in success_times.items()}
     observations = {row[0]: dict(zip(
         ["observations", "valid", "invalid", "markets", "contracts", "events", "latest_observed_at",
          "before_first_poll_close", "group_a_matches"], row[1:])) for row in conn.execute(
@@ -172,9 +175,23 @@ def health(conn):
         "  SELECT FROM forward_test_runs r WHERE r.status = 'success' "
         "  AND r.started_at >= e.scheduled_end - interval '7 days' AND r.started_at < e.scheduled_end - interval '6 days')"
         ).fetchone()[0]
+    # Storage: the whole database (what the hosting plan limits), its largest tables, and how much the
+    # forward-test tables grew in the last 7 days (raw bodies exactly; observation rows at their average size)
+    database_bytes, raw_week, observations_week, observation_rows, observation_bytes = conn.execute(
+        "SELECT pg_database_size(current_database()), "
+        "(SELECT coalesce(sum(length(body_gzip)), 0) FROM forward_test_raw WHERE stored_at > now() - interval '7 days'), "
+        "(SELECT count(*) FROM forward_test_observations WHERE observed_at > now() - interval '7 days'), "
+        "(SELECT count(*) FROM forward_test_observations), pg_total_relation_size('forward_test_observations')").fetchone()
+    largest_tables = conn.execute(
+        "SELECT c.relname, pg_total_relation_size(c.oid) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relkind = 'r' AND n.nspname = ANY(current_schemas(false)) ORDER BY 2 DESC LIMIT 5").fetchall()
+    week_bytes = raw_week + (observations_week * observation_bytes / observation_rows if observation_rows else 0)
     return {"runs": dict(zip(["total", "success", "failed", "running"], runs)), "latest_run": latest_run,
-            "latest_failure": latest_failure, "last_success": last_success, "observations": observations,
-            "entries": entries, "group_a_entries": group_a, "missed_confirmed": missed_confirmed}
+            "latest_failure": latest_failure, "last_success": last_success, "success_times": success_times,
+            "observations": observations, "entries": entries, "group_a_entries": group_a,
+            "missed_confirmed": missed_confirmed,
+            "storage": {"database_bytes": database_bytes, "largest_tables": largest_tables,
+                        "forward_test_week_bytes": week_bytes}}
 
 
 def read_table(database_url, sql):

@@ -267,6 +267,52 @@ def test_health_counts_observations_and_flags_a_stale_collector(lab_db, fake_col
     assert healthy
     text, healthy = lab.health_report(h, NOW + timedelta(hours=1), timedelta(minutes=30), ["election_2026_pilot"])
     assert not healthy and "election_2026_pilot: last successful run 2026-10-28 10:00:00 UTC -> STALE" in text
+    # Storage numbers come from the database itself; the rows just written count as this week's growth
+    assert h["success_times"] == {"election_2026_pilot": [NOW]}
+    assert h["storage"]["database_bytes"] > 0 and h["storage"]["forward_test_week_bytes"] > 0
+    assert "forward_test_observations" in {name for name, _ in h["storage"]["largest_tables"]}
+
+
+def health_numbers(group_a_runs, database_mb=20, latest_status="success"):
+    """What storage.health() returns for a database whose successful Group A runs started at these times."""
+    last = group_a_runs[-1]
+    return {"runs": {"total": len(group_a_runs), "success": len(group_a_runs), "failed": 0, "running": 0},
+            "latest_run": (len(group_a_runs), latest_status, last, None), "latest_failure": None,
+            "last_success": {"group_a_7day": last}, "success_times": {"group_a_7day": group_a_runs},
+            "observations": {}, "entries": {}, "group_a_entries": 0, "missed_confirmed": 0,
+            "storage": {"database_bytes": database_mb * lab.MB, "largest_tables": [("markets", 2 * lab.MB)],
+                        "forward_test_week_bytes": 1.5 * lab.MB}}
+
+
+def test_a_gap_longer_than_the_entry_window_fails_the_health_check_once():
+    runs = [NOW, NOW + timedelta(hours=12), NOW + timedelta(hours=40)]  # the slot at +24 h never ran
+    text, healthy = lab.health_report(health_numbers(runs), runs[-1] + timedelta(minutes=5), lab.STALE_AFTER)
+    assert not healthy and "Gaps longer than the 24 h entry window: 1" in text and "MISSED WINDOW" in text
+    later = runs + [runs[-1] + timedelta(hours=12)]
+    text, healthy = lab.health_report(health_numbers(later), later[-1] + timedelta(minutes=5), lab.STALE_AFTER)
+    assert healthy and "entry window: 1; latest 2026-10-28 22:00:00 UTC -> 2026-10-30 02:00:00 UTC" in text
+    assert "MISSED WINDOW" not in text  # reported once, then kept in the count
+
+
+def test_group_a_is_stale_after_one_schedule_interval_plus_githubs_delay():
+    assert lab.STALE_AFTER == timedelta(hours=22)
+    _, healthy = lab.health_report(health_numbers([NOW]), NOW + timedelta(hours=21), lab.STALE_AFTER)
+    assert healthy  # the next 12-hour run, started 9 h late by GitHub: normal
+    text, healthy = lab.health_report(health_numbers([NOW]), NOW + timedelta(hours=23), lab.STALE_AFTER)
+    assert not healthy and "group_a_7day: last successful run 2026-10-28 10:00:00 UTC -> STALE" in text
+    _, healthy = lab.health_report(health_numbers([NOW], latest_status="failed"), NOW, lab.STALE_AFTER)
+    assert not healthy
+
+
+def test_storage_is_summarised_and_warns_near_the_limit():
+    limit = 500 * lab.MB
+    text, healthy = lab.health_report(health_numbers([NOW], database_mb=100), NOW, lab.STALE_AFTER, storage_limit_bytes=limit)
+    assert healthy and "Storage: database 100 MB of 500 MB (20%)" in text and "WARNING" not in text
+    assert "grew ~1.5 MB in the last 7 days (at that rate the limit is ~1,867 days away)" in text
+    text, healthy = lab.health_report(health_numbers([NOW], database_mb=410), NOW, lab.STALE_AFTER, storage_limit_bytes=limit)
+    assert not healthy and "WARNING: over 80% of the limit" in text
+    _, healthy = lab.health_report(health_numbers([NOW], database_mb=900), NOW, lab.STALE_AFTER)
+    assert healthy  # no limit given (the local database): summary only
 
 
 def test_health_confirms_missed_labels_only_when_no_run_happened(lab_db, fake_collector):

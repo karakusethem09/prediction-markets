@@ -1,4 +1,5 @@
 """Tests for the forward-test results analysis, on synthetic data only (no network, no database)."""
+import base64
 import json
 import re
 
@@ -7,7 +8,7 @@ import pandas as pd
 import pytest
 
 from analysis import forward_test_results as ftr
-from analysis.forward_test_report import audit_markdown, results_markdown
+from analysis.forward_test_report import audit_markdown, results_markdown, schedule_text
 
 T0 = pd.Timestamp("2026-10-28 10:00", tz="UTC")
 
@@ -163,6 +164,38 @@ def test_scheduled_slots_count_from_the_slot_the_first_run_served():
     assert ftr.scheduled_slots(first, pd.Timestamp("2026-10-22 18:41", tz="UTC")) == 4  # 09:41 ... 18:41
 
 
+def test_slots_are_counted_with_the_schedule_each_run_was_made_from():
+    created = ["2026-11-06 00:50", "2026-11-06 03:50", "2026-11-06 09:50",  # every 3 h: 4 slots 00:41-09:41, one skipped
+               "2026-11-07 05:30",                                          # a manual run: not a slot
+               "2026-11-08 00:50", "2026-11-09 00:50"]                      # every 12 h: 3 slots, the 12:41 one skipped
+    gh = pd.DataFrame({"created_at": pd.to_datetime(created, utc=True),
+                       "event": ["schedule"] * 3 + ["workflow_dispatch"] + ["schedule"] * 2,
+                       "every_hours": [3, 3, 3, 3, 12, 12]})
+    segments = ftr.schedule_segments(gh)
+    assert [(s["every_hours"], s["scheduled_runs"], s["slots"]) for s in segments] == [(3, 3, 4), (12, 2, 3)]
+    assert schedule_text({"schedules": segments}) == ("every 3 hours (Nov 06 – Nov 06: 3 runs for 4 slots), "
+                                                      "then every 12 hours (Nov 08 – Nov 09: 2 runs for 3 slots)")
+
+
+def test_cron_hours_reads_the_interval_and_refuses_other_forms():
+    assert ftr.cron_hours("41 */12 * * *") == 12 and ftr.cron_hours("41 */3 * * *") == 3
+    with pytest.raises(ValueError):
+        ftr.cron_hours("41 0,12 * * *")  # a form scheduled_slots can't count: fail loudly, never guess
+
+
+def test_the_schedule_is_read_from_the_workflow_file_at_the_runs_commit(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_get(url, params):
+        calls.append(params)
+        return {"content": base64.b64encode(b'on:\n  schedule:\n    - cron: "41 */12 * * *"  # note\n').decode()}
+
+    monkeypatch.setattr(ftr, "get_with_retry", fake_get)
+    assert ftr.workflow_cron_hours("abc123", tmp_path) == 12
+    assert ftr.workflow_cron_hours("abc123", tmp_path) == 12  # from the saved response: a commit never changes
+    assert calls == [{"ref": "abc123"}] and (tmp_path / "forward_test_yml_abc123.json").exists()
+
+
 def test_period_labels_are_utc_days_not_poll_closing_times():
     assert ftr.period(pd.Timestamp("2026-11-02 23:59", tz="UTC")) == "before Nov 3"
     assert ftr.period(pd.Timestamp("2026-11-03 23:30", tz="UTC")) == "Nov 3"
@@ -174,7 +207,7 @@ def test_period_labels_are_utc_days_not_poll_closing_times():
 RUNS = pd.DataFrame({"run_id": [1], "started_at": [T0], "finished_at": [T0], "status": ["success"],
                      "entered": [2], "missed": [0], "settled": [0]})
 GITHUB = pd.DataFrame({"github_run_id": [10], "created_at": [T0 - pd.Timedelta(minutes=2)], "event": ["schedule"],
-                       "conclusion": ["success"]})
+                       "conclusion": ["success"], "every_hours": [3]})
 
 
 def analyze(entries, resolutions):

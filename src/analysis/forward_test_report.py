@@ -15,6 +15,14 @@ def hours(delta):
     return delta.total_seconds() / 3600
 
 
+def schedule_text(a, counts=True):
+    """How the workflow was scheduled, from each run's own workflow file: e.g. "every 3 hours (Oct 22 – Nov 07:
+    58 runs for 126 slots), then every 12 hours (Nov 07 – Nov 20: 25 runs for 27 slots)"."""
+    return ", then ".join(f"every {s['every_hours']} hours ({s['first_run']:%b %d} – {s['last_run']:%b %d}"
+                          + (f": {s['scheduled_runs']} runs for {s['slots']} slots" if counts else "") + ")"
+                          for s in a["schedules"]) or "never (no scheduled runs)"
+
+
 def checklist(results):
     """The audit's 13 questions, answered from the data."""
     a, positions = results["audit"], results["positions"]
@@ -27,8 +35,8 @@ def checklist(results):
         ("2. Successful, failed and missing scheduled runs",
          f"{a['online_success']} successful runs logged; {a['github_failed_runs']} failed on GitHub "
          f"({', '.join(a['github_failed_times']) or 'none'}), absent from the database's run log; "
-         f"{a['github_scheduled_runs']} scheduled runs for {a['cron_slots']} three-hour cron slots, so "
-         f"{max(a['cron_slots'] - a['github_scheduled_runs'], 0)} slots produced no run"),
+         f"scheduled {schedule_text(a)}, so {max(a['cron_slots'] - a['github_scheduled_runs'], 0)} of "
+         f"{a['cron_slots']} slots produced no run"),
         ("3. Distinct markets discovered and recorded", f"{a['markets']:,} markets ({', '.join(f'{n} {s}' for s, n in sorted(a['entry_status'].items()))})"),
         ("4. Real order books captured", f"{a['recorded_with_quote']:,} recorded markets with a quote; {a['recorded_without_quote']} recorded with an empty book (no quote)"),
         ("5–7. Runs before / on / after November 3 (UTC days)", by_period(a["runs_by_period"])),
@@ -106,7 +114,8 @@ def audit_markdown(results):
         "",
         "## Collection reliability",
         "",
-        f"- The workflow is scheduled every 3 hours, but GitHub started runs a median of {a['median_gap_hours']:.1f} h apart "
+        f"- The workflow was scheduled {schedule_text(a, counts=False)}; GitHub started runs a median of "
+        f"{a['median_gap_hours']:.1f} h apart "
         f"(longest gap {a['max_gap_hours']:.1f} h). A market's entry window is 24 hours, "
         + ("so every gap was shorter than an entry window." if a["max_gap_hours"] < 24 else
            "so at least one gap was longer than an entry window: markets could have been missed then."),

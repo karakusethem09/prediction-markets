@@ -5,8 +5,8 @@ import pandas as pd
 import pytest
 
 from forward_test.models import (
-    before_first_poll_close, book_depth, book_summary, classify_event, entry_decision, exchange_time, fill_order,
-    fill_price, first_outcome, in_group_a, is_stale, official_settlement, settlement, validate_book,
+    before_first_poll_close, book_depth, book_summary, classify_event, collection_gaps, entry_decision, exchange_time,
+    fill_order, fill_price, first_outcome, in_group_a, is_stale, official_settlement, settlement, validate_book,
 )
 
 END = pd.Timestamp("2026-11-04 04:59", tz="UTC")  # how Polymarket schedules election-night markets
@@ -128,6 +128,15 @@ def test_fill_order_flags_orders_below_the_minimum_size():
 ])
 def test_election_day_baseline_is_strictly_before_the_first_poll_close(observed_at, expected):
     assert before_first_poll_close(observed_at) is expected
+
+
+def test_gaps_longer_than_the_entry_window_are_found():
+    t = pd.Timestamp("2026-11-08 00:41", tz="UTC")
+    skipped_one = [t + timedelta(hours=36, minutes=5), t, t + timedelta(hours=12), t + timedelta(hours=48)]  # any order
+    assert collection_gaps(skipped_one) == [(t + timedelta(hours=12), t + timedelta(hours=36, minutes=5))]
+    # Exactly one window apart: every 7-day mark in between still had a run within its day
+    assert collection_gaps([t, t + timedelta(hours=24)]) == []
+    assert collection_gaps([]) == [] and collection_gaps([t]) == []
 
 
 def test_collector_is_stale_without_a_recent_success():
