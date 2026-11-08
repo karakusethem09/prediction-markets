@@ -1,11 +1,15 @@
-# Forward test of Group A (docs/forward_test_spec.md): every 3 hours, record markets reaching their
+# Forward test of Group A (docs/forward_test_spec.md): every 12 hours, record markets reaching their
 # 7-day mark with their real order books, and settle the ones that have closed. Paper trades only:
 # this reads public data and writes to the project's own database, nothing else.
+# The election pilot is no longer collected here: it runs only on demand (election_day.yml).
 name: Forward test
 
 on:
   schedule:
-    - cron: "41 */3 * * *"  # every 3 hours at :41 (off the hour, away from the daily update at 06:17)
+    # Every 12 hours at :41 (00:41 and 12:41 UTC; every 3 hours until 2026-11-07). Two slots fall in each
+    # market's 24-hour entry window. GitHub starts scheduled runs hours late and sometimes skips them; if it
+    # skips one, markets can be missed, and the health check below reports the gap.
+    - cron: "41 */12 * * *"
   workflow_dispatch:  # adds a "Run workflow" button on the Actions tab
 
 concurrency:
@@ -34,9 +38,12 @@ jobs:
         run: python -m forward_test --experiment group_a_7day
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Observe election markets (separate pilot; a failure here can't affect the Group A step)
+      # Read-only. Fails (a red run, which GitHub emails about) if the latest run failed, if the gap before
+      # this run was longer than the 24-hour entry window (markets may have been missed), or if the
+      # database is over 80% of Supabase's 500 MB free tier
+      - name: Health check
         if: always()
-        run: python -m forward_test --experiment election_2026_pilot --min-volume 100000
+        run: python -m forward_test health
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Keep the raw API responses of this run

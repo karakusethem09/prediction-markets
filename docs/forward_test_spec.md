@@ -39,7 +39,7 @@ Historically about 6.5% of markets with a usable 7-day price were in Group A (39
 
 ## How it runs
 
-- A **GitHub Actions** job runs every **3 hours**, so each market is entered within about 3 hours of its 7-day mark.
+- A **GitHub Actions** job runs every **3 hours**, so each market is entered within about 3 hours of its 7-day mark. *(Every 12 hours since 2026-11-07; the rules are unchanged, see the note at the end.)*
 - Each run:
   1. records the run as started,
   2. finds markets that crossed the 7-day mark,
@@ -126,3 +126,11 @@ Written at 17:45 UTC on November 3, before the first polls closed and before any
 - **The election pilot ran only on the author's computer** (local database): every 10 minutes from 17:29 UTC on November 3. The computer went to sleep at 21:12 UTC, so the last observation on November 3 is from 21:08:53 UTC; collection resumed at 00:39 UTC on November 4. These observations exist only locally.
 - **The frozen Group A test kept running online** with the original code (`forward_test.yml`, every 3 hours as scheduled; GitHub started runs a median of 6.5 hours apart). Its election-night positions were all entered at 10:00 UTC on 2026-10-28.
 - Results and the data audit: [`election_2026_forward_test_results.md`](election_2026_forward_test_results.md), [`election_2026_data_audit.md`](election_2026_data_audit.md).
+
+### Note, 2026-11-07: collection every 12 hours
+
+The election is over, so the collector's schedule was simplified. **The Group A rules are unchanged:** the $100,000 volume rule, the best-ask range [0.20, 0.30), the 7-day target and the 24-hour entry window. Nothing is backdated, and the window is not extended for late runs.
+
+- **Group A is collected every 12 hours** (`41 */12 * * *`: 00:41 and 12:41 UTC) instead of every 3 hours. A market is still entered at the first successful run after its 7-day mark, so entries now come later within the same 24-hour window: up to 12 hours plus GitHub's start delay after the mark, instead of about 3 hours.
+- **Markets can be missed more easily.** Two slots fall in each 24-hour window. If GitHub skips one, a market whose mark fell in the gap may get no run in its window; it is then recorded as *missed* (or not at all, if it has already closed by the next run), and never entered late. `python -m forward_test health` reports every gap between successful runs longer than 24 hours, and the workflow fails on the run that follows a new one.
+- **The election pilot is no longer collected on a schedule.** It can still be collected on demand (`.github/workflows/election_day.yml`). Its observations, tables and reports are kept as they are.

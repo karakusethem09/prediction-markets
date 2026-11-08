@@ -186,9 +186,11 @@ cards[5].metric("Markets quoted", f"{audit['recorded_with_quote']:,}",
 # 2. Collection timeline
 st.subheader("Collection timeline")
 st.plotly_chart(timeline_figure(bundle["runs.csv"]), theme=None, width="stretch")
+schedules = audit.get("schedules") or [{"every_hours": 3}]  # bundles written before 2026-11-07 had one schedule
+every = ", then every ".join(f"{s['every_hours']} hours" for s in schedules)
 st.caption(f"Each bar is one online collector run ({audit['online_success']} runs, "
            f"{pd.Timestamp(audit['first_success']):%b %d} – {pd.Timestamp(audit['last_success']):%b %d} UTC). "
-           + (f"Scheduled every 3 hours, GitHub started them a median of {audit['median_gap_hours']:.1f} hours apart."
+           + (f"Scheduled every {every}; GitHub started them a median of {audit['median_gap_hours']:.1f} hours apart."
               if audit.get("median_gap_hours") is not None else ""))
 if not bundle["pilot_daily.csv"].empty:
     with st.expander("Election pilot: observations collected on a local computer (no trades)"):

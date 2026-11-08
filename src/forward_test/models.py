@@ -211,3 +211,13 @@ def before_first_poll_close(observed_at):
 def is_stale(last_success, now, max_age):
     """True if the collector hasn't succeeded within max_age (or never has)."""
     return last_success is None or now - last_success > max_age
+
+
+ENTRY_WINDOW = timedelta(days=ENTRY_DAYS - MISSED_DAYS)  # a market can only be entered in the day after its mark
+
+
+def collection_gaps(run_times, window=ENTRY_WINDOW):
+    """(earlier, later) pairs of consecutive successful runs further apart than the entry window. A market whose
+    7-day mark fell in such a gap had no run in its window: it couldn't be entered (and is never entered late)."""
+    times = sorted(run_times)
+    return [(earlier, later) for earlier, later in zip(times, times[1:]) if later - earlier > window]
