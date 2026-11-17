@@ -176,8 +176,9 @@ def test_price_history_refresh_downloads_again(fake_prices, tmp_path):
     assert json.loads((tmp_path / "daily" / "123.json").read_text())["history"]  # and overwritten
 
 
-def test_get_with_retry_retries_a_response_cut_off_mid_body(monkeypatch, sleeps):
-    answers = [requests.exceptions.ChunkedEncodingError("connection broken"), make_response(200, [{"id": "1"}])]
+@pytest.mark.parametrize("error", [requests.exceptions.ChunkedEncodingError, requests.exceptions.ContentDecodingError])
+def test_get_with_retry_retries_a_response_cut_off_mid_body(monkeypatch, sleeps, error):
+    answers = [error("connection broken"), make_response(200, [{"id": "1"}])]
 
     def fake_get(url, params, timeout):
         answer = answers.pop(0)

@@ -58,6 +58,17 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 -- Databases created before the checks column existed get it here
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS checks jsonb;
 
--- The snapshot rule's other half: the price is at most 1 day old (added 2026-11-16; safe to run again)
-ALTER TABLE snapshots DROP CONSTRAINT IF EXISTS snapshots_price_is_fresh;
-ALTER TABLE snapshots ADD CONSTRAINT snapshots_price_is_fresh CHECK (target_time - price_time <= interval '1 day');
+-- The snapshot rule's other half: the price is at most 1 day old (added 2026-11-16).
+-- Added only once, because adding it locks and rescans the whole table; safe to run again.
+-- Checked for this snapshots table (the one on the search_path), so a test schema gets its own.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'snapshots_price_is_fresh' AND conrelid = 'snapshots'::regclass
+    ) THEN
+        ALTER TABLE snapshots ADD CONSTRAINT snapshots_price_is_fresh
+            CHECK (target_time - price_time <= interval '1 day');
+    END IF;
+END
+$$;
