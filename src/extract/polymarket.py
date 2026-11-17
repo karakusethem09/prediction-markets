@@ -38,7 +38,9 @@ def request_with_retry(send, url, max_retries=5):
     for attempt in range(max_retries):
         try:
             response = send()
-        except (requests.ConnectionError , requests.Timeout):
+        # ChunkedEncodingError / ContentDecodingError: the connection broke while the body was arriving
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ContentDecodingError):
             response = None
 
         if response is not None and response.status_code < 400:

@@ -57,3 +57,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 
 -- Databases created before the checks column existed get it here
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS checks jsonb;
+
+-- The snapshot rule's other half: the price is at most 1 day old (added 2026-11-16; safe to run again)
+ALTER TABLE snapshots DROP CONSTRAINT IF EXISTS snapshots_price_is_fresh;
+ALTER TABLE snapshots ADD CONSTRAINT snapshots_price_is_fresh CHECK (target_time - price_time <= interval '1 day');

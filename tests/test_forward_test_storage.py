@@ -135,6 +135,16 @@ def test_missed_only_when_the_collector_was_absent(lab_db, fake_collector):
     assert query(lab_db, "SELECT market_id, status FROM forward_test_entries") == [("absent", "missed")]
 
 
+def test_a_pilot_only_run_doesnt_hide_a_missed_group_a_market(lab_db, fake_collector):
+    lab.run_collection(lab_db, now=NOW - timedelta(days=5))  # the test began 5 days ago
+    # The only run in the market's first day collected the election pilot, which never looks at Group A's markets
+    lab.run_collection(lab_db, now=NOW - timedelta(days=3) + timedelta(hours=2), experiments=["election_2026_pilot"])
+    fake_collector["near"] = [candidate("absent", 4)]  # crossed its 7-day mark 3 days ago
+    assert lab.run_collection(lab_db, now=NOW)["missed"] == 1
+    with psycopg.connect(lab_db) as conn:
+        assert health(conn)["missed_confirmed"] == 1
+
+
 def test_an_invalid_book_is_recorded_as_invalid_not_traded(lab_db, fake_collector):
     fake_collector["near"] = [candidate("x", 6.9), candidate("empty", 6.9)]
     fake_collector["asks"] = {"tok-empty": "no-asks"}  # tok-x has no book at all

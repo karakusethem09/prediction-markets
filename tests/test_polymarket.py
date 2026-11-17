@@ -174,3 +174,17 @@ def test_price_history_refresh_downloads_again(fake_prices, tmp_path):
 
     assert len(fake_prices) == 2  # both files were downloaded again
     assert json.loads((tmp_path / "daily" / "123.json").read_text())["history"]  # and overwritten
+
+
+def test_get_with_retry_retries_a_response_cut_off_mid_body(monkeypatch, sleeps):
+    answers = [requests.exceptions.ChunkedEncodingError("connection broken"), make_response(200, [{"id": "1"}])]
+
+    def fake_get(url, params, timeout):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(polymarket.session, "get", fake_get)
+    assert polymarket.get_with_retry(polymarket.GAMMA_URL, params={}) == [{"id": "1"}]
+    assert sleeps == [1]

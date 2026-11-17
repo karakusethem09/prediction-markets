@@ -80,8 +80,18 @@ def test_start(conn):
     return conn.execute("SELECT min(started_at) FROM forward_test_runs").fetchone()[0]
 
 
+# Successful runs that collected Group A. Runs logged before 2026-11-03 have no settings: all of those did,
+# except the ones that saved only pilot observations
+GROUP_A_RUNS = (
+    "SELECT r.started_at FROM forward_test_runs r WHERE r.status = 'success' AND coalesce(r.settings -> 'experiments', "
+    "  (SELECT jsonb_agg(DISTINCT o.experiment) FROM forward_test_observations o WHERE o.run_id = r.run_id), "
+    "  '[\"group_a_7day\"]') ? 'group_a_7day'")
+
+
 def successful_run_times(conn):
-    return [row[0] for row in conn.execute("SELECT started_at FROM forward_test_runs WHERE status = 'success'")]
+    """Start times of the successful Group A runs: what decides whether a late market was really missed.
+    A pilot-only run never looks at Group A's markets, so it can't count as the collector being there."""
+    return [row[0] for row in conn.execute(GROUP_A_RUNS)]
 
 
 def recorded_market_ids(conn):
@@ -172,8 +182,8 @@ def health(conn):
     # after its 7-day mark (the corrected rule, models.entry_decision)
     missed_confirmed = conn.execute(
         "SELECT count(*) FROM forward_test_entries e WHERE e.status = 'missed' AND NOT EXISTS ("
-        "  SELECT FROM forward_test_runs r WHERE r.status = 'success' "
-        "  AND r.started_at >= e.scheduled_end - interval '7 days' AND r.started_at < e.scheduled_end - interval '6 days')"
+        f"  SELECT FROM ({GROUP_A_RUNS}) r WHERE r.started_at >= e.scheduled_end - interval '7 days' "
+        "  AND r.started_at < e.scheduled_end - interval '6 days')"
         ).fetchone()[0]
     # Storage: the whole database (what the hosting plan limits), its largest tables, and how much the
     # forward-test tables grew in the last 7 days (raw bodies exactly; observation rows at their average size)

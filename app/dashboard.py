@@ -235,5 +235,5 @@ st.markdown(
     "**Notes.** Only resolved markets with at least $1M volume, open at least a day. "
     "Prices are taken 1, 7 and 30 days before each market closed, never the final price. "
     "\"Happened\" refers to the first listed outcome (e.g. *Yes*). Markets in the same event "
-    "are related, so the true uncertainty is a little wider than the bars show."
+    "are related, which is why the bars come from resampling whole events."
 )

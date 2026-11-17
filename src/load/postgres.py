@@ -11,6 +11,7 @@ import psycopg
 from psycopg.types.json import Json
 
 from transform.normalize import build_normalized_tables
+from transform.schemas import snapshots_schema
 from transform.snapshots import take_snapshots
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -121,7 +122,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     markets, prices = build_normalized_tables(verbose=True)
-    snapshots = take_snapshots(markets, prices)
+    # markets and prices come back validated; check the snapshots too before anything is loaded
+    snapshots = snapshots_schema.validate(take_snapshots(markets, prices))
 
     tables = {"markets": markets, "price_history": prices, "snapshots": snapshots}
     if args.skip_prices:

@@ -67,3 +67,12 @@ def test_runs_are_logged_including_failures(db_url):
     assert runs == [("success", "1", False), ("failed", None, True)]
     # The failed run changed nothing: its transaction was rolled back
     assert query(db_url, "SELECT price FROM price_history") == [(0.4,)]
+
+
+def test_the_database_refuses_a_snapshot_price_more_than_a_day_old(db_url):
+    stale = sample_tables()
+    stale["snapshots"]["price_time"] = utc("2025-01-07 23:00")  # 25 hours before the snapshot moment
+    with pytest.raises(psycopg.errors.CheckViolation, match="snapshots_price_is_fresh"):
+        run_load(stale, db_url)
+    run_load(sample_tables(), db_url)  # the schema file runs again on every load: the rule is added only once
+    assert query(db_url, "SELECT count(*) FROM pg_constraint WHERE conname = 'snapshots_price_is_fresh'") == [(1,)]
