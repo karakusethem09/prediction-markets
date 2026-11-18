@@ -69,6 +69,20 @@ def test_runs_are_logged_including_failures(db_url):
     assert query(db_url, "SELECT price FROM price_history") == [(0.4,)]
 
 
+def test_a_run_killed_before_logging_its_end_is_marked_failed_by_the_next_run(db_url):
+    run_load(sample_tables(), db_url)
+    with psycopg.connect(db_url, autocommit=True) as conn:  # e.g. stopped by the workflow's timeout
+        conn.execute("INSERT INTO pipeline_runs (status, started_at) VALUES "
+                     "('running', now() - interval '3 hours'), ('running', now() - interval '10 minutes')")
+
+    run_load(sample_tables(), db_url)
+
+    runs = query(db_url, "SELECT status, finished_at IS NOT NULL, error FROM pipeline_runs ORDER BY run_id")
+    assert runs[1] == ("failed", True, "killed or timed out: no end logged within 2 h of its start")
+    assert runs[2] == ("running", False, None)  # started recently: it may still be going
+    assert [status for status, _, _ in runs] == ["success", "failed", "running", "success"]
+
+
 def test_the_database_refuses_a_snapshot_price_more_than_a_day_old(db_url):
     stale = sample_tables()
     stale["snapshots"]["price_time"] = utc("2025-01-07 23:00")  # 25 hours before the snapshot moment

@@ -5,6 +5,7 @@ load never creates duplicates: it just brings the database up to date.
 """
 import argparse
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import psycopg
@@ -31,6 +32,8 @@ TABLE_KEYS = {
     "processing_status": ["market_id"],
 }
 COPY_CHUNK_ROWS = 500_000  # send big tables in pieces so memory use stays small
+# A run still 'running' this long after it started was killed (pipeline.yml's job timeout is 45 minutes)
+STALE_RUN_AFTER = timedelta(hours=2)
 
 
 def lists_to_postgres_arrays(df):
@@ -72,9 +75,16 @@ def upsert(conn, table, df):
 def start_run(log_conn):
     """Make sure the tables exist and record a new run as 'running'. Returns its run_id.
 
+    Runs still 'running' that started more than STALE_RUN_AFTER ago were killed (e.g. by the job's
+    timeout) before they could log their end: they are logged as failed first, so none stays 'running'.
     log_conn should be an autocommit connection, so the log survives a failed load.
     """
     create_tables(log_conn)
+    log_conn.execute(
+        "UPDATE pipeline_runs SET status = 'failed', finished_at = now(), error = %s "
+        "WHERE status = 'running' AND started_at < now() - %s",
+        (f"killed or timed out: no end logged within {STALE_RUN_AFTER.total_seconds() / 3600:g} h of its start",
+         STALE_RUN_AFTER))
     return log_conn.execute(
         "INSERT INTO pipeline_runs (status) VALUES ('running') RETURNING run_id"
     ).fetchone()[0]

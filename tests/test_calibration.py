@@ -142,3 +142,15 @@ def test_freshness_details_tell_visitors_what_is_going_on():
     assert freshness(run_status(5, new_markets=0), FRESH_NOW)["detail"] == "updated 5 hours ago · no new markets"
     assert "No successful update for 4 days" in freshness(run_status(4 * 24 + 1), FRESH_NOW)["detail"]
     assert "from the last successful update, 2 days ago" in freshness(run_status(48, last_run_failed=True), FRESH_NOW)["detail"]
+
+
+def test_a_run_killed_before_logging_its_end_counts_as_failed():
+    from analysis.calibration import latest_run_failed
+    def runs(status, hours_ago):
+        return pd.DataFrame({"started_at": [FRESH_NOW - pd.Timedelta(hours=hours_ago)], "status": [status]})
+
+    assert latest_run_failed(runs("failed", 1), FRESH_NOW)
+    assert latest_run_failed(runs("running", 3), FRESH_NOW)  # the job's timeout is 45 minutes
+    assert not latest_run_failed(runs("running", 0.5), FRESH_NOW)  # still at work
+    assert not latest_run_failed(runs("success", 30), FRESH_NOW)
+    assert not latest_run_failed(runs("running", 3).iloc[:0], FRESH_NOW)  # no runs yet

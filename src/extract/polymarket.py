@@ -2,7 +2,7 @@
 
 import json
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import requests
@@ -34,7 +34,8 @@ def post_with_retry(url, body, max_retries=5):
 
 
 def request_with_retry(send, url, max_retries=5):
-    """Call send() until it works: back off on 429, 5xx and network errors; never retry other 4xx."""
+    """Call send() until it works: back off on 429, 5xx, network errors and answers that aren't JSON;
+    never retry other 4xx."""
     for attempt in range(max_retries):
         try:
             response = send()
@@ -44,7 +45,10 @@ def request_with_retry(send, url, max_retries=5):
             response = None
 
         if response is not None and response.status_code < 400:
-            return response.json()
+            try:
+                return response.json()
+            except ValueError:  # a 2xx whose body isn't JSON (e.g. a proxy's error page): retried like a 5xx
+                response = None
         if response is not None and response.status_code < 500 and response.status_code != 429:
             response.raise_for_status()  #400,404...: our mistake ,retrying wont help
 
@@ -112,7 +116,10 @@ def fetch_price_history(market, refresh=False):
     earlier download came back empty or incomplete).
     """
     token_id = json.loads(market["clobTokenIds"])[0]
-    close_ts = int(datetime.fromisoformat(market["closedTime"]).timestamp())
+    closed = datetime.fromisoformat(market["closedTime"])
+    if closed.tzinfo is None:  # no offset: UTC, as transform/normalize.py reads it (never the machine's time zone)
+        closed = closed.replace(tzinfo=timezone.utc)
+    close_ts = int(closed.timestamp())
 
     requests_to_make = {
         # Whole history, one price per day (interval=max only works with daily prices)

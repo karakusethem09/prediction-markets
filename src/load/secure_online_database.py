@@ -11,6 +11,7 @@ login for the public dashboard) to .env. Passwords are never printed.
 import argparse
 import os
 import secrets
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -52,6 +53,27 @@ def reader_url(admin_url, password):
     return urlunsplit(parts._replace(netloc=f"{READER}.{project_ref}:{password}@{host}"))
 
 
+def env_lines(env_file):
+    """The env file's lines without the old DASHBOARD_DATABASE_URL. Read before the password changes:
+    without the file there would be nowhere to save the new one, and it would be lost."""
+    if not env_file.exists():
+        raise SystemExit(f"{env_file} not found: nothing was changed. Create it (with SUPABASE_URL) and rerun.")
+    return [line for line in env_file.read_text().splitlines() if not line.startswith("DASHBOARD_DATABASE_URL=")]
+
+
+def write_env(env_file, lines):
+    """Replace the env file in one step: write a temporary file next to it, readable only by its owner
+    (mkstemp makes it 0600), then rename it over the old one. A crash leaves the old file or the new one."""
+    handle, temporary = tempfile.mkstemp(dir=env_file.parent, prefix=f"{env_file.name}.")
+    try:
+        with os.fdopen(handle, "w") as file:
+            file.write("\n".join(lines) + "\n")
+        os.replace(temporary, env_file)
+    except BaseException:
+        os.unlink(temporary)  # never leave a stray copy of the login next to it
+        raise
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lock down the online database.")
     parser.add_argument("--keep-password", action="store_true",
@@ -66,6 +88,8 @@ if __name__ == "__main__":
         print("\n".join(problems) if problems else "All tables locked down: RLS on, no web API access, reader is read-only.")
         raise SystemExit(1 if problems else 0)
 
+    lines = None if args.keep_password else env_lines(ENV_FILE)  # before any change: no .env, nothing changes
+
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(SECURITY_SQL.read_text())
     if args.keep_password:
@@ -78,7 +102,5 @@ if __name__ == "__main__":
         conn.execute(sql.SQL("ALTER ROLE {} PASSWORD {}").format(sql.Identifier(READER), sql.Literal(password)))
     print("Security settings applied and dashboard_reader password set.")
 
-    lines = [line for line in ENV_FILE.read_text().splitlines() if not line.startswith("DASHBOARD_DATABASE_URL=")]
-    lines.append(f"DASHBOARD_DATABASE_URL={reader_url(admin_url, password)}")
-    ENV_FILE.write_text("\n".join(lines) + "\n")
+    write_env(ENV_FILE, lines + [f"DASHBOARD_DATABASE_URL={reader_url(admin_url, password)}"])
     print("DASHBOARD_DATABASE_URL saved in .env (not printed).")

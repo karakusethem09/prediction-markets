@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sqlalchemy import create_engine
 
-from load.postgres import DATABASE_URL
+from load.postgres import DATABASE_URL, STALE_RUN_AFTER
 
 N_BINS = 10  # price buckets of 10 percentage points: 0-10%, 10-20%, ..., 90-100%
 Z_95 = 1.96  # z-value for a 95% confidence interval
@@ -61,9 +61,19 @@ def load_pipeline_status(database_url=DATABASE_URL, history=10):
     return {
         "last_success_at": last_success["finished_at"].iloc[0] if len(last_success) else None,
         "last_success_rows": last_success["row_counts"].iloc[0] if len(last_success) else None,
-        "last_run_failed": bool(len(runs)) and runs["status"].iloc[0] == "failed",
+        "last_run_failed": latest_run_failed(runs, pd.Timestamp.now(tz="UTC")),
         "recent_runs": runs,
     }
+
+
+def latest_run_failed(runs, now):
+    """Whether the newest run (first row) failed: logged as failed, or still 'running' more than
+    STALE_RUN_AFTER after it started (killed before it could log its end, see load.postgres.start_run)."""
+    if not len(runs):
+        return False
+    latest = runs.iloc[0]
+    killed = latest["status"] == "running" and now - pd.Timestamp(latest["started_at"]) > STALE_RUN_AFTER
+    return latest["status"] == "failed" or bool(killed)
 
 
 def freshness(status, now, stale_after=STALE_AFTER):

@@ -176,6 +176,55 @@ def test_price_history_refresh_downloads_again(fake_prices, tmp_path):
     assert json.loads((tmp_path / "daily" / "123.json").read_text())["history"]  # and overwritten
 
 
+def not_json_response(status_code=200, text=b"<html>Bad gateway</html>"):
+    """A response whose body isn't JSON (e.g. a proxy's error page sent with status 200)."""
+    response = make_response(status_code, None)
+    response._content = text
+    return response
+
+
+def test_get_with_retry_retries_a_body_that_isnt_json(fake_http, sleeps):
+    calls = fake_http([not_json_response(), make_response(200, [{"id": "1"}])])
+
+    assert polymarket.get_with_retry(polymarket.GAMMA_URL, params={}) == [{"id": "1"}]
+    assert len(calls) == 2 and sleeps == [1]  # the same backoff as a 5xx
+
+
+def test_get_with_retry_retries_a_server_error(fake_http, sleeps):
+    calls = fake_http([make_response(500, {"error": "oops"}), make_response(200, [{"id": "1"}])])
+
+    assert polymarket.get_with_retry(polymarket.GAMMA_URL, params={}) == [{"id": "1"}]
+    assert len(calls) == 2 and sleeps == [1]
+
+
+def test_get_with_retry_gives_up_with_runtime_error_when_no_answer_is_json(fake_http, sleeps):
+    # The error the callers handle (e.g. fetch_all_price_histories), never a JSON decoding error
+    calls = fake_http([not_json_response() for _ in range(5)])
+
+    with pytest.raises(RuntimeError, match="after 5 attempts"):
+        polymarket.get_with_retry(polymarket.GAMMA_URL, params={})
+
+    assert len(calls) == 5
+    assert sleeps == [1, 2, 4, 8]  # no wait after the last attempt
+
+
+@pytest.fixture
+def new_york_clock(monkeypatch):
+    """Run the test with the machine's local time zone set to New York (UTC-5 in January), then restore it."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    polymarket.time.tzset()
+    yield
+    monkeypatch.undo()
+    polymarket.time.tzset()
+
+
+def test_a_close_time_without_an_offset_is_read_as_utc(fake_prices, new_york_clock):
+    polymarket.fetch_price_history({**MARKET, "closedTime": "2025-01-03 00:00:00"})
+
+    _, hourly = fake_prices
+    assert hourly["endTs"] == CLOSE_TS  # as with "+00", never five hours later (the machine's time zone)
+
+
 @pytest.mark.parametrize("error", [requests.exceptions.ChunkedEncodingError, requests.exceptions.ContentDecodingError])
 def test_get_with_retry_retries_a_response_cut_off_mid_body(monkeypatch, sleeps, error):
     answers = [error("connection broken"), make_response(200, [{"id": "1"}])]
