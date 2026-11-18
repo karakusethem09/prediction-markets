@@ -1,7 +1,8 @@
 # Forward test of Group A (docs/forward_test_spec.md): every 12 hours, record markets reaching their
 # 7-day mark with their real order books, and settle the ones that have closed. Paper trades only:
 # this reads public data and writes to the project's own database, nothing else.
-# The election pilot is no longer collected here: it runs only on demand (election_day.yml).
+# The election pilot is no longer collected online: it can still be run by hand (python -m forward_test
+# --experiment election_2026_pilot), but no workflow runs it.
 name: Forward test
 
 on:

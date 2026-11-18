@@ -3,6 +3,7 @@
 The collector never changes the schema: `migrate` is a separate, deliberate command
 (python -m forward_test migrate), and a collection refuses to run until the migrations are applied.
 """
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +18,8 @@ SCHEMA_FILES = [
     PROJECT_ROOT / "sql" / "migrations" / "002_observations_and_election_pilot.sql",
 ]
 REQUIRED_MIGRATION = "002_observations_and_election_pilot"
+# A run still 'running' this long after it started was killed (forward_test.yml's job timeout is 20 minutes)
+STALE_RUN_AFTER = timedelta(hours=1)
 
 ENTRY_COLUMNS = [
     "market_id", "platform", "event_id", "question", "token_id", "scheduled_end", "recorded_at", "run_id",
@@ -60,8 +63,15 @@ def start_run(log_conn, now=None, settings=None):
 
     started_at is the moment the run's decisions use: `now` if given (tests simulate other days),
     otherwise the database clock, in UTC. settings: how the run is configured (experiments, volume floor).
+    Runs still 'running' that started more than STALE_RUN_AFTER ago (database clock) were killed, e.g. by
+    the job's timeout, before they could log their end: they are logged as failed first.
     """
     check_schema(log_conn)
+    log_conn.execute(
+        "UPDATE forward_test_runs SET status = 'failed', finished_at = now(), error = %s "
+        "WHERE status = 'running' AND started_at < now() - %s",
+        (f"killed or timed out: no end logged within {STALE_RUN_AFTER.total_seconds() / 3600:g} h of its start",
+         STALE_RUN_AFTER))
     return log_conn.execute(
         "INSERT INTO forward_test_runs (status, started_at, settings) VALUES ('running', coalesce(%s, now()), %s) "
         "RETURNING run_id, started_at", (now, Jsonb(settings) if settings is not None else None)).fetchone()
@@ -80,12 +90,14 @@ def test_start(conn):
     return conn.execute("SELECT min(started_at) FROM forward_test_runs").fetchone()[0]
 
 
-# Successful runs that collected Group A. Runs logged before 2026-11-03 have no settings: all of those did,
-# except the ones that saved only pilot observations
-GROUP_A_RUNS = (
-    "SELECT r.started_at FROM forward_test_runs r WHERE r.status = 'success' AND coalesce(r.settings -> 'experiments', "
+# Whether run r collected Group A. Runs logged before 2026-11-03 have no settings: all of those did,
+# except the ones that saved only pilot observations. Also used by src/analysis/forward_test_results.py
+COLLECTED_GROUP_A = (
+    "coalesce(r.settings -> 'experiments', "
     "  (SELECT jsonb_agg(DISTINCT o.experiment) FROM forward_test_observations o WHERE o.run_id = r.run_id), "
     "  '[\"group_a_7day\"]') ? 'group_a_7day'")
+# Successful runs that collected Group A
+GROUP_A_RUNS = f"SELECT r.started_at FROM forward_test_runs r WHERE r.status = 'success' AND {COLLECTED_GROUP_A}"
 
 
 def successful_run_times(conn):
@@ -149,9 +161,12 @@ def saved_counts(conn, run_id):
 
 def health(conn):
     """The numbers behind `python -m forward_test health` (read-only queries)."""
+    # unfinished: still 'running' long after they started, so killed; the next run logs them as failed (start_run)
     runs = conn.execute(
         "SELECT count(*), count(*) FILTER (WHERE status = 'success'), count(*) FILTER (WHERE status = 'failed'), "
-        "count(*) FILTER (WHERE status = 'running') FROM forward_test_runs").fetchone()
+        "count(*) FILTER (WHERE status = 'running'), "
+        "count(*) FILTER (WHERE status = 'running' AND started_at < now() - %s) FROM forward_test_runs",
+        (STALE_RUN_AFTER,)).fetchone()
     latest_run = conn.execute(
         "SELECT run_id, status, started_at, error FROM forward_test_runs ORDER BY run_id DESC LIMIT 1").fetchone()
     latest_failure = conn.execute(
@@ -196,7 +211,7 @@ def health(conn):
         "SELECT c.relname, pg_total_relation_size(c.oid) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE c.relkind = 'r' AND n.nspname = ANY(current_schemas(false)) ORDER BY 2 DESC LIMIT 5").fetchall()
     week_bytes = raw_week + (observations_week * observation_bytes / observation_rows if observation_rows else 0)
-    return {"runs": dict(zip(["total", "success", "failed", "running"], runs)), "latest_run": latest_run,
+    return {"runs": dict(zip(["total", "success", "failed", "running", "unfinished"], runs)), "latest_run": latest_run,
             "latest_failure": latest_failure, "last_success": last_success, "success_times": success_times,
             "observations": observations, "entries": entries, "group_a_entries": group_a,
             "missed_confirmed": missed_confirmed,

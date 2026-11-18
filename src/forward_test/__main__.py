@@ -12,7 +12,7 @@ Two experiments, stored separately and never combined:
     python -m forward_test health                       # is Group A being collected? (exit code 1 on any problem)
 
 Uses DATABASE_URL (the local database if not set). GitHub Actions runs a Group A collection every 12 hours
-(.github/workflows/forward_test.yml); the election pilot runs only on demand (election_day.yml).
+(.github/workflows/forward_test.yml); the election pilot is only run by hand.
 """
 import argparse
 import os
@@ -29,8 +29,8 @@ from forward_test.models import (
     collection_gaps, entry_decision, fill_price, in_group_a, is_stale, meets_group_a_volume, settlement, validate_book,
 )
 from forward_test.storage import (
-    finish_run, health, load_entries, migrate, open_market_ids, recorded_market_ids, save, saved_counts, start_run,
-    successful_run_times, test_start,
+    STALE_RUN_AFTER, finish_run, health, load_entries, migrate, open_market_ids, recorded_market_ids, save,
+    saved_counts, start_run, successful_run_times, test_start,
 )
 from load.postgres import DATABASE_URL
 
@@ -122,7 +122,8 @@ def read_state(database_url, dry_run, now):
 
 
 def collect(state, now, run_id, evidence, experiments, limit, pilot_min_volume=PILOT_MIN_VOLUME):
-    """Everything one run would save. Returns (entries, settlements, observations, missed)."""
+    """Everything one run would save. Returns (entries, settlements, observations, missed, unreachable):
+    unreachable counts the recorded markets whose result couldn't be read this run (they stay open)."""
     entries, observations, missed = [], [], 0
 
     if "group_a_7day" in experiments:
@@ -156,14 +157,20 @@ def collect(state, now, run_id, evidence, experiments, limit, pilot_min_volume=P
         books = collector.order_books([m["token_id"] for m in markets], evidence)
         observations += [observation_row("election_2026_pilot", run_id, now, m, books[m["token_id"]]) for m in markets]
 
-    settlements = []
+    settlements, unreachable = [], 0
     if "group_a_7day" in experiments:
         for market_id in state["open"][:limit]:
-            result = collector.market_result(market_id, evidence)
+            try:
+                result = collector.market_result(market_id, evidence)
+            except (requests.HTTPError, RuntimeError) as error:
+                # Settling can wait: the market stays open and is looked up again next run
+                print(f"  result of {market_id} not read this run: {error}")
+                unreachable += 1
+                continue
             status, outcome = settlement(result["closed"], result["final"], result["outcome"])
             if status != "open":
                 settlements.append((market_id, status, outcome, result["final_volume"]))
-    return entries, settlements, observations, missed
+    return entries, settlements, observations, missed, unreachable
 
 
 def run_collection(database_url=DATABASE_URL, now=None, dry_run=False, limit=None, experiments=tuple(EXPERIMENTS),
@@ -173,9 +180,9 @@ def run_collection(database_url=DATABASE_URL, now=None, dry_run=False, limit=Non
         now = now or collector.utc_now()
         state = read_state(database_url, dry_run, now)
         evidence = collector.Evidence(now, keep_files=False)
-        entries, settlements, observations, missed = collect(state, now, None, evidence, experiments, limit,
-                                                             pilot_min_volume)
-        result = summarize(entries, settlements, observations, missed, len(evidence.bodies))
+        entries, settlements, observations, missed, unreachable = collect(state, now, None, evidence, experiments,
+                                                                          limit, pilot_min_volume)
+        result = summarize(entries, settlements, observations, missed, len(evidence.bodies), unreachable)
         print("DRY RUN, nothing saved:", result)
         return {**result, "observation_rows": observations, "entry_rows": entries}
 
@@ -187,15 +194,15 @@ def run_collection(database_url=DATABASE_URL, now=None, dry_run=False, limit=Non
         try:
             state = read_state(database_url, dry_run, now)
             evidence = collector.Evidence(now)
-            entries, settlements, observations, missed = collect(state, now, run_id, evidence, experiments, limit,
-                                                                 pilot_min_volume)
+            entries, settlements, observations, missed, unreachable = collect(state, now, run_id, evidence,
+                                                                              experiments, limit, pilot_min_volume)
             with connect(database_url) as conn:  # one transaction: all of this run's changes, or none
                 save(conn, entries, settlements, observations, list(evidence.bodies.values()))
             verify_saved(database_url, run_id, observations)
         except Exception as error:
             finish_run(log_conn, run_id, "failed", error=f"{type(error).__name__}: {error}")
             raise
-        result = summarize(entries, settlements, observations, missed, len(evidence.bodies))
+        result = summarize(entries, settlements, observations, missed, len(evidence.bodies), unreachable)
         finish_run(log_conn, run_id, "success", entered=result["entered"], missed=missed,
                    settled=len(settlements), observed=len(observations), invalid=result["invalid_books"])
     print(f"Run {run_id}:", result)
@@ -217,13 +224,14 @@ def verify_saved(database_url, run_id, observations):
                                f"({with_book} with books), found {found}")
 
 
-def summarize(entries, settlements, observations, missed, raw_bodies):
+def summarize(entries, settlements, observations, missed, raw_bodies, unreachable=0):
     return {
         "entered": sum(1 for e in entries if e["status"] == "open"),
         "entered_group_a": sum(1 for e in entries if e["status"] == "open" and e["in_group_a"]),
         "invalid_entries": sum(1 for e in entries if e["status"] == "invalid"),
         "missed": missed,
         "settled": len(settlements),
+        "results_not_read": unreachable,  # recorded markets left open because their result couldn't be read
         "observations": {x: sum(1 for o in observations if o["experiment"] == x) for x in EXPERIMENTS},
         "invalid_books": sum(1 for o in observations if not o["book_valid"]),
         "raw_bodies": raw_bodies,
@@ -262,7 +270,8 @@ def report(entries):
 def health_report(h, now, max_age, experiments=tuple(SCHEDULED), storage_limit_bytes=None):
     """Plain-text health check from storage.health(). Returns (text, healthy).
 
-    Unhealthy if the latest run failed, a listed experiment is stale, the gap before Group A's latest
+    Unhealthy if the latest run failed, a run was killed before it logged its end (still 'running' more than
+    STALE_RUN_AFTER after it started), a listed experiment is stale, the gap before Group A's latest
     successful run was longer than the entry window (markets may have been missed), or the database is
     over STORAGE_WARN_SHARE of storage_limit_bytes (None: no storage check). Only the listed experiments
     are judged (each workflow checks its own)."""
@@ -275,7 +284,10 @@ def health_report(h, now, max_age, experiments=tuple(SCHEDULED), storage_limit_b
     failure = h["latest_failure"]
     lines.append(f"Storage/run errors: {runs['failed']} failed runs" +
                  (f"; latest: run {failure[0]} at {failure[1]:{utc}}: {failure[2]}" if failure else ""))
-    healthy = bool(latest) and latest[1] != "failed"
+    if runs["unfinished"]:
+        lines.append(f"  KILLED: {runs['unfinished']} runs still 'running' more than {STALE_RUN_AFTER} after they "
+                     "started (killed or timed out): failed runs, logged as failed when the next run starts")
+    healthy = bool(latest) and latest[1] != "failed" and not runs["unfinished"]
     for experiment in EXPERIMENTS:
         last = h["last_success"].get(experiment)
         checked = experiment in experiments

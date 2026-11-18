@@ -25,10 +25,11 @@ def test_the_recurring_workflow_collects_only_group_a_then_checks_health():
     assert commands == ["python -m forward_test --experiment group_a_7day", "python -m forward_test health"]
 
 
-def test_the_election_pilot_runs_only_on_demand():
-    text = (WORKFLOWS / "election_day.yml").read_text()
-    assert crons("election_day.yml") == [] and "workflow_dispatch" in text
-    assert "python -m forward_test --experiment election_2026_pilot" in text
+def test_no_workflow_collects_the_election_pilot():
+    # The pilot ended with the 2026 election: it is only ever run by hand now
+    commands = [c for path in WORKFLOWS.glob("*.yml") for c in re.findall(r"run: (.*)", path.read_text())]
+    assert any("python -m forward_test" in c for c in commands)  # the commands were found...
+    assert not any("election_2026_pilot" in c for c in commands)  # ...and none collects the pilot
 
 
 def test_the_calibration_pipeline_keeps_its_daily_schedule():

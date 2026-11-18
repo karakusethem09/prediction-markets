@@ -19,6 +19,7 @@ docs/election_2026_data_audit.md and docs/election_2026_forward_test_results.md.
 """
 import base64
 import glob
+import gzip
 import json
 import math
 import os
@@ -35,6 +36,7 @@ from forward_test import collector
 from forward_test.models import (
     GROUP_A, MIN_ENTRY_VOLUME, book_summary, classify_event, exchange_time, fill_price, official_settlement,
 )
+from forward_test.storage import COLLECTED_GROUP_A, STALE_RUN_AFTER
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = PROJECT_ROOT / "docs" / "data" / "forward_test_election_2026"
@@ -297,12 +299,22 @@ def schedule_segments(github_runs):
             for _, runs in scheduled.groupby(segment)]
 
 
+def failed_runs(runs, as_of):
+    """Runs that failed: logged as failed, or still 'running' more than STALE_RUN_AFTER after they started
+    (killed before they could log their end; the next run logs them as failed, storage.start_run)."""
+    killed = (runs["status"] == "running") & (pd.to_datetime(runs["started_at"], utc=True) < as_of - STALE_RUN_AFTER)
+    return (runs["status"] == "failed") | killed
+
+
 def analyze(entries, runs, resolutions, raw_checks, github_runs, pilot, as_of, n_boot=N_BOOT):
-    """Every number in the bundle and the reports, from the loaded inputs (no I/O here)."""
+    """Every number in the bundle and the reports, from the loaded inputs (no I/O here).
+    runs: forward_test_runs with collected_group_a (load_runs)."""
     positions = build_positions(entries, resolutions, raw_checks)
     scenarios = {name: scenario_rows(positions, dollars) for name, dollars in SCENARIOS.items()} if len(positions) else {}
     perf = {name: {**performance(rows), **event_bootstrap(rows, n_boot)} for name, rows in scenarios.items()}
-    success = runs[runs["status"] == "success"]["started_at"]
+    # Successful Group A runs: a pilot-only run never looked at Group A's markets, so it can't show the
+    # collector was there (the collector's own rule, storage.successful_run_times)
+    success = runs[(runs["status"] == "success") & runs["collected_group_a"].astype(bool)]["started_at"]
     recorded = entries[entries["status"] != "missed"]
     missed = missed_check(entries, success)
     gh = github_runs
@@ -321,7 +333,7 @@ def analyze(entries, runs, resolutions, raw_checks, github_runs, pilot, as_of, n
     audit = {
         "as_of_utc": as_of,
         "online_runs": len(runs), "online_success": len(success),
-        "online_logged_failures": int((runs["status"] == "failed").sum()),
+        "online_logged_failures": int(failed_runs(runs, as_of).sum()),
         "first_success": success.min() if len(success) else None, "last_success": success.max() if len(success) else None,
         "runs_by_period": success.map(period).value_counts().to_dict() if len(success) else {},
         "github_scheduled_runs": int((gh["event"] == "schedule").sum()) if len(gh) else 0,
@@ -431,21 +443,55 @@ def workflow_cron_hours(sha, folder):
 
 def raw_book_checks(positions_entries, runs, github_runs):
     """Find each position's raw order book in the saved GitHub artifacts and re-derive its quote.
-    A database run is matched to the GitHub run that started it (within 15 minutes before it)."""
+    A database run is matched to the GitHub run that started it (within 15 minutes before it).
+
+    Books are looked up as the current collector saves them (artifact_books), then as the original one did
+    (legacy_books). One artifact can hold more than one collector run (e.g. a Group A and a pilot run), so
+    more than one book for a token: the quote is verified if one of them reproduces it exactly."""
     ok = github_runs[github_runs["conclusion"] == "success"]
     matched = pd.merge_asof(runs.sort_values("started_at"), ok, left_on="started_at", right_on="created_at",
                             direction="backward", tolerance=pd.Timedelta(minutes=15)).set_index("run_id")
-    checks = {}
+    checks, saved = {}, {}
     for entry in positions_entries.to_dict("records"):
         github_run = matched["github_run_id"].get(entry["run_id"])
         if pd.isna(github_run) or not (ARTIFACTS_DIR / str(int(github_run))).exists():
             checks[entry["market_id"]] = {"raw_book": "expired before the audit"}
             continue
-        files = glob.glob(str(ARTIFACTS_DIR / str(int(github_run)) / "**" / f"book_{entry['token_id'][-12:]}.json"),
-                          recursive=True)
-        books = [b for b in (json.loads(Path(f).read_text()) for f in files) if b.get("asset_id") == entry["token_id"]]
-        checks[entry["market_id"]] = verify_quote(entry, books[0]) if books else {"raw_book": "missing from artifact"}
+        folder = ARTIFACTS_DIR / str(int(github_run))
+        if folder not in saved:
+            saved[folder] = artifact_books(folder)
+        books = saved[folder].get(entry["token_id"]) or legacy_books(folder, entry["token_id"])
+        results = [verify_quote(entry, book) for book in books]
+        checks[entry["market_id"]] = (next((r for r in results if r["raw_book"] == "verified"), results[0])
+                                      if results else {"raw_book": "missing from artifact"})
     return checks
+
+
+def artifact_books(folder):
+    """{token: [books]} for the current collector's files in one artifact: book_<sha>.json.gz, gzip-compressed
+    and matched by the token inside. They have no timestamp or hash (the database keeps those in their own
+    columns), so verify_quote gives them no exchange time."""
+    books = {}
+    for path in sorted(folder.rglob("book_*.json.gz")):
+        try:
+            book = json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, EOFError, ValueError):  # a damaged file: skip it, the other books can still be checked
+            print(f"  unreadable book file skipped: {path}")
+            continue
+        books.setdefault(book.get("asset_id"), []).append(book)
+    return books
+
+
+def legacy_books(folder, token_id):
+    """The original collector's files for one token: book_<last 12 characters of the token>.json, plain JSON."""
+    files = glob.glob(str(folder / "**" / f"book_{token_id[-12:]}.json"), recursive=True)
+    return [b for b in (json.loads(Path(f).read_text()) for f in files) if b.get("asset_id") == token_id]
+
+
+def load_runs(database_url):
+    """Every run, with whether it collected Group A (collected_group_a), by the collector's own rule."""
+    return read_query(database_url, f"SELECT r.*, {COLLECTED_GROUP_A} AS collected_group_a "
+                                    "FROM forward_test_runs r ORDER BY run_id")
 
 
 def load_pilot(database_url=LOCAL_DATABASE_URL):
@@ -480,7 +526,7 @@ def load_pilot(database_url=LOCAL_DATABASE_URL):
 
 
 def load_inputs(database_url):
-    runs = read_query(database_url, "SELECT * FROM forward_test_runs ORDER BY run_id")
+    runs = load_runs(database_url)
     entries = read_query(database_url, "SELECT * FROM forward_test_entries")
     github_runs = load_github_runs()
     group_a = entries[entries["in_group_a"].fillna(False).astype(bool)]
@@ -546,6 +592,7 @@ def write_bundle(results, out_dir=RESULTS_DIR):
     results["comparison"].to_csv(out_dir / "comparison.csv", index=False)
     results["subgroups"].to_csv(out_dir / "subgroups.csv", index=False)
     runs = results["runs"]
+    runs = runs[runs["collected_group_a"].astype(bool)]  # the page is about Group A: no pilot-only runs
     runs[["run_id", "started_at", "finished_at", "status", "entered", "missed", "settled"]].to_csv(
         out_dir / "runs.csv", index=False)
     pilot = results["audit"]["pilot"]

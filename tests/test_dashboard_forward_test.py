@@ -40,7 +40,7 @@ def write_bundle(folder, settled=True):
         entries.append(entry(i, 0.20 + 0.01 * i, "settled" if final else "open", float(i == 1) if final else np.nan))
         resolutions.append(resolution(i, final, won=(i == 1)))
     runs = pd.DataFrame({"run_id": [1], "started_at": [T0], "finished_at": [T0], "status": ["success"],
-                         "entered": [6], "missed": [0], "settled": [0]})
+                         "entered": [6], "missed": [0], "settled": [0], "collected_group_a": [True]})
     github = pd.DataFrame({"github_run_id": [10], "created_at": [T0 - pd.Timedelta(minutes=2)],
                            "event": ["schedule"], "conclusion": ["success"], "every_hours": [3]})
     results = ftr.analyze(pd.DataFrame(entries), runs, resolutions, {}, github, None,

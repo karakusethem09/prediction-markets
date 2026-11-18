@@ -9,6 +9,7 @@ import pytest
 
 from analysis import forward_test_results as ftr
 from analysis.forward_test_report import audit_markdown, results_markdown, schedule_text
+from forward_test import collector
 
 T0 = pd.Timestamp("2026-10-28 10:00", tz="UTC")
 
@@ -205,7 +206,7 @@ def test_period_labels_are_utc_days_not_poll_closing_times():
 # ---------- whole analysis and reports ----------
 
 RUNS = pd.DataFrame({"run_id": [1], "started_at": [T0], "finished_at": [T0], "status": ["success"],
-                     "entered": [2], "missed": [0], "settled": [0]})
+                     "entered": [2], "missed": [0], "settled": [0], "collected_group_a": [True]})
 GITHUB = pd.DataFrame({"github_run_id": [10], "created_at": [T0 - pd.Timedelta(minutes=2)], "event": ["schedule"],
                        "conclusion": ["success"], "every_hours": [3]})
 
@@ -310,3 +311,90 @@ def test_summary_json_is_strict_json(tmp_path):
 
 def test_times_are_always_shown_in_utc():
     assert ftr.fmt_time(pd.Timestamp("2026-11-03 18:00", tz="America/New_York")) == "2026-11-03 23:00:00 UTC"
+
+
+# ---------- raw books in the saved GitHub artifacts ----------
+
+def recorded_quote():
+    """Entry "a" as recorded from book([(0.25, 1000.0)]): $250 on offer, so a $1,000 order can't fill."""
+    return entry("a", 0.25, ask_size_at_best=1000.0, best_bid=0.24, fill_100=0.25) | {"fill_price_1000": None}
+
+
+@pytest.fixture
+def artifact(tmp_path, monkeypatch):
+    """GitHub run 10's artifact (GITHUB, which started database run 1), as saved locally before it expired.
+    The collector's raw files are written straight into it: the artifact is its data/raw/forward_test/."""
+    folder = tmp_path / "10"
+    folder.mkdir()
+    monkeypatch.setattr(ftr, "ARTIFACTS_DIR", tmp_path)
+    monkeypatch.setattr(collector, "RAW_DIR", folder)
+    return folder
+
+
+def check(entries):
+    return ftr.raw_book_checks(pd.DataFrame(entries), RUNS, GITHUB)
+
+
+def test_a_book_saved_by_the_current_collector_is_found_by_its_token(artifact):
+    evidence = collector.Evidence(T0)
+    collector.archive_book(book([(0.25, 1000.0)]) | {"hash": "h1"}, evidence)  # gzip, no timestamp or hash
+    collector.archive_book(book([(0.40, 10.0)], asset="tok-b"), evidence)  # another market's book
+    assert [p.name.endswith(".json.gz") for p in artifact.rglob("book_*")] == [True, True]
+
+    raw = check([recorded_quote()])["a"]
+
+    assert raw["raw_book"] == "verified" and raw["ask_levels"] == 1
+    assert raw["exchange_time"] is None  # the archived body has no timestamp: none is made up
+
+
+def test_a_book_saved_by_the_original_collector_is_still_found(artifact):
+    folder = artifact / "2026-10-28" / "1000"
+    folder.mkdir(parents=True)
+    (folder / "book_tok-a.json").write_text(json.dumps(book([(0.25, 1000.0)])))  # book_<token[-12:]>.json
+
+    raw = check([recorded_quote()])["a"]
+
+    assert raw["raw_book"] == "verified"
+    assert raw["exchange_time"] == pd.Timestamp("2026-10-28 10:00:47", tz="UTC")  # the book's own timestamp
+
+
+def test_with_two_runs_in_one_artifact_the_quote_is_checked_against_each_book_of_its_token(artifact):
+    # A pilot run three minutes earlier, in the same GitHub run, saw a different book for the same token
+    collector.archive_book(book([(0.27, 50.0)]), collector.Evidence(T0 - pd.Timedelta(minutes=3)))
+    assert check([recorded_quote()])["a"]["raw_book"] == "mismatch"
+    collector.archive_book(book([(0.25, 1000.0)]), collector.Evidence(T0))  # the Group A run's own book
+    assert check([recorded_quote()])["a"]["raw_book"] == "verified"
+
+
+def test_a_token_without_a_saved_book_is_reported_missing(artifact):
+    collector.archive_book(book([(0.40, 10.0)], asset="tok-b"), collector.Evidence(T0))
+    assert check([recorded_quote()])["a"] == {"raw_book": "missing from artifact"}
+
+
+# ---------- which runs count ----------
+
+def test_pilot_only_runs_dont_count_as_the_collector_being_there():
+    # Mirrors storage's test_a_pilot_only_run_doesnt_hide_a_missed_group_a_market: "absent" crossed its
+    # 7-day mark at T0 + 1 day, and the only run in its first day after that collected the election pilot
+    runs = pd.DataFrame({"run_id": [1, 2, 3], "status": ["success"] * 3, "collected_group_a": [True, False, True],
+                         "started_at": [T0, T0 + pd.Timedelta(days=1, hours=2), T0 + pd.Timedelta(days=3)],
+                         "finished_at": [T0] * 3, "entered": [0] * 3, "missed": [0, 0, 1], "settled": [0] * 3})
+    absent = entry("absent", 0.25, status="missed", group_a=False, run_id=3,
+                   scheduled_end=T0 + pd.Timedelta(days=8), recorded_at=T0 + pd.Timedelta(days=3))
+    results = ftr.analyze(pd.DataFrame([absent]), runs, [], {}, GITHUB, None, as_of=T0 + pd.Timedelta(days=4))
+    audit = results["audit"]
+    assert (audit["missed_labels"], audit["missed_confirmed"]) == (1, 1)
+    assert audit["online_success"] == 2 and audit["max_gap_hours"] == 72  # the pilot run splits no gap
+
+
+def test_a_run_still_running_long_after_it_started_counts_as_failed():
+    # Killed (e.g. by the workflow's timeout) before it could log its end, and not yet marked by a later run
+    as_of = T0 + pd.Timedelta(hours=5)
+    runs = pd.DataFrame({"run_id": [1, 2, 3, 4], "status": ["success", "failed", "running", "running"],
+                         "started_at": [T0, T0 + pd.Timedelta(hours=1), T0 + pd.Timedelta(hours=2),
+                                        as_of - pd.Timedelta(minutes=10)],  # the last one may still be going
+                         "collected_group_a": [True] * 4})
+    assert list(ftr.failed_runs(runs, as_of)) == [False, True, True, False]
+    results = ftr.analyze(pd.DataFrame([entry("a", 0.25)]), runs, [resolution("a")], {}, GITHUB, None,
+                          as_of=as_of, n_boot=50)
+    assert results["audit"]["online_logged_failures"] == 2

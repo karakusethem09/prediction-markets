@@ -5,8 +5,10 @@ from datetime import timedelta
 import pandas as pd
 import psycopg
 import pytest
+import requests
 
 import forward_test.__main__ as lab
+from analysis import forward_test_results as ftr
 from forward_test.storage import SchemaNotReady, health, load_entries, migrate, save
 
 NOW = pd.Timestamp("2026-10-28 10:00", tz="UTC")
@@ -206,16 +208,85 @@ def test_a_failed_run_is_logged_and_saves_nothing(lab_db, fake_collector, monkey
     fake_collector["asks"] = {"tok-a": 0.25}
     lab.run_collection(lab_db, now=NOW)
 
-    def broken(market_id, evidence):
+    def broken(tokens, evidence):
         raise RuntimeError("API down")
 
-    monkeypatch.setattr(lab.collector, "market_result", broken)
+    # Order books that can't be read still stop the run: entering markets without them would use up their one entry
+    monkeypatch.setattr(lab.collector, "order_books", broken)
     fake_collector["near"] = [candidate("b", 6.9)]
     fake_collector["asks"]["tok-b"] = 0.25
     with pytest.raises(RuntimeError):
         lab.run_collection(lab_db, now=NOW)
     assert query(lab_db, "SELECT status, error FROM forward_test_runs ORDER BY run_id")[-1] == ("failed", "RuntimeError: API down")
     assert query(lab_db, "SELECT count(*) FROM forward_test_entries WHERE market_id = 'b'") == [(0,)]
+
+
+@pytest.mark.parametrize("error", [RuntimeError("Gave up after 5 attempts"),
+                                   requests.HTTPError("404 Client Error")])
+def test_a_result_that_cant_be_read_leaves_the_market_open_for_the_next_run(lab_db, fake_collector, monkeypatch,
+                                                                             error):
+    fake_collector["near"] = [candidate("a", 6.9), candidate("b", 6.9)]
+    fake_collector["asks"] = {"tok-a": 0.25, "tok-b": 0.28}
+    lab.run_collection(lab_db, now=NOW)
+    fake_collector["near"] = []
+    fake_collector["results"] = {"a": {"closed": True, "final": True, "outcome": 1, "final_volume": 900_000.0},
+                                 "b": {"closed": True, "final": True, "outcome": 0, "final_volume": 1.0}}
+    reachable = lab.collector.market_result
+
+    def unreachable_a(market_id, evidence):
+        if market_id == "a":
+            raise error
+        return reachable(market_id, evidence)
+
+    monkeypatch.setattr(lab.collector, "market_result", unreachable_a)
+    result = lab.run_collection(lab_db, now=NOW + timedelta(days=8))
+
+    assert (result["settled"], result["results_not_read"]) == (1, 1)  # b settled; a counted, not lost
+    assert query(lab_db, "SELECT status FROM forward_test_runs ORDER BY run_id")[-1] == ("success",)
+    assert dict(query(lab_db, "SELECT market_id, status FROM forward_test_entries")) == {"a": "open", "b": "settled"}
+    monkeypatch.setattr(lab.collector, "market_result", reachable)
+    assert lab.run_collection(lab_db, now=NOW + timedelta(days=8, hours=12))["settled"] == 1  # tried again
+    assert dict(query(lab_db, "SELECT market_id, status FROM forward_test_entries")) == {"a": "settled", "b": "settled"}
+
+
+def test_a_killed_run_counts_as_failed_and_the_next_run_logs_it(lab_db, fake_collector):
+    lab.run_collection(lab_db, now=NOW)
+    with psycopg.connect(lab_db, autocommit=True) as conn:  # e.g. stopped by the workflow's 20-minute timeout
+        conn.execute("INSERT INTO forward_test_runs (status, started_at) VALUES "
+                     "('running', now() - interval '2 hours'), ('running', now() - interval '10 minutes')")
+        h = health(conn)
+    assert (h["runs"]["running"], h["runs"]["unfinished"]) == (2, 1)  # the recent one may still be going
+    text, healthy = lab.health_report(h, NOW + timedelta(minutes=5), lab.STALE_AFTER)
+    assert not healthy and "KILLED: 1 runs still 'running' more than 1:00:00 after they started" in text
+
+    lab.run_collection(lab_db, now=NOW + timedelta(hours=12))
+
+    rows = query(lab_db, "SELECT status, finished_at IS NOT NULL, error FROM forward_test_runs ORDER BY run_id")
+    assert rows == [("success", True, None),
+                    ("failed", True, "killed or timed out: no end logged within 1 h of its start"),
+                    ("running", False, None), ("success", True, None)]
+    with psycopg.connect(lab_db) as conn:
+        h = health(conn)
+    assert (h["runs"]["failed"], h["runs"]["unfinished"], h["latest_failure"][0]) == (1, 0, 2)
+    text, healthy = lab.health_report(h, NOW + timedelta(hours=12, minutes=5), lab.STALE_AFTER)
+    assert healthy and "1 failed runs; latest: run 2" in text and "KILLED" not in text
+
+
+def test_the_results_audit_also_ignores_pilot_only_runs(lab_db, fake_collector):
+    # The same history as test_a_pilot_only_run_doesnt_hide_a_missed_group_a_market, read the way
+    # src/analysis/forward_test_results.py reads the online database
+    lab.run_collection(lab_db, now=NOW - timedelta(days=5))
+    lab.run_collection(lab_db, now=NOW - timedelta(days=3) + timedelta(hours=2), experiments=["election_2026_pilot"])
+    fake_collector["near"] = [candidate("absent", 4)]
+    lab.run_collection(lab_db, now=NOW)
+
+    runs = ftr.load_runs(lab_db)
+    entries = ftr.read_query(lab_db, "SELECT * FROM forward_test_entries")
+    assert list(runs["collected_group_a"]) == [True, False, True]
+    no_github_runs = pd.DataFrame(columns=["github_run_id", "created_at", "event", "conclusion", "every_hours"])
+    audit = ftr.analyze(entries, runs, [], {}, no_github_runs, None, as_of=NOW)["audit"]
+    assert (audit["missed_labels"], audit["missed_confirmed"], audit["online_success"]) == (1, 1, 2)
+    assert audit["max_gap_hours"] == 5 * 24
 
 
 def test_report_waits_for_enough_trades_before_a_verdict(lab_db, fake_collector):
@@ -286,7 +357,8 @@ def test_health_counts_observations_and_flags_a_stale_collector(lab_db, fake_col
 def health_numbers(group_a_runs, database_mb=20, latest_status="success"):
     """What storage.health() returns for a database whose successful Group A runs started at these times."""
     last = group_a_runs[-1]
-    return {"runs": {"total": len(group_a_runs), "success": len(group_a_runs), "failed": 0, "running": 0},
+    return {"runs": {"total": len(group_a_runs), "success": len(group_a_runs), "failed": 0, "running": 0,
+                     "unfinished": 0},
             "latest_run": (len(group_a_runs), latest_status, last, None), "latest_failure": None,
             "last_success": {"group_a_7day": last}, "success_times": {"group_a_7day": group_a_runs},
             "observations": {}, "entries": {}, "group_a_entries": 0, "missed_confirmed": 0,
