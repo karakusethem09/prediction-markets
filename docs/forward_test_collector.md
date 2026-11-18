@@ -30,7 +30,7 @@ The schema is never changed by a collection. Apply migrations on purpose first; 
 | Election pilot with a higher volume floor | `python -m forward_test --experiment election_2026_pilot --min-volume 100000` |
 | Is it healthy? | `python -m forward_test health`: Group A only by default (`--experiment election_2026_pilot --stale-minutes 30` checks the pilot instead). Exit code 1 on any problem, see [Checking on it](#checking-on-it). Add `--storage-limit-mb 0` on the local database, which has no size limit |
 | Automatically | GitHub Actions, [`.github/workflows/forward_test.yml`](../.github/workflows/forward_test.yml): **Group A only, every 12 hours** (`41 */12 * * *`: 00:41 and 12:41 UTC; every 3 hours until 2026-11-07), then the health check. GitHub starts scheduled runs late (6.7 h on median for the daily update) and skipped 55% of the 3-hourly slots. |
-| Election pilot, on demand | [`.github/workflows/election_day.yml`](../.github/workflows/election_day.yml): one run when started with **Run workflow** (its Nov 3–4 schedule was removed unused, and the 3-hourly pilot step on 2026-11-07). Pilot only, markets ≥ $100,000. |
+| Election pilot, online | No workflow runs it any more. Its on-demand workflow (`.github/workflows/election_day.yml`) was removed after the election; before that, its Nov 3–4 schedule was removed unused, and the 3-hourly pilot step on 2026-11-07. Locally, use the `--experiment election_2026_pilot` command above. |
 
 **Storage**, measured online on 2026-11-07:
 - **A Group A run** adds about 65 kB (the market list and the settlement checks), plus about 2 kB for each market it enters (about 23 a day, whatever the schedule). At 2 runs a day that's about 0.2 MB a day, or 6 MB a month.

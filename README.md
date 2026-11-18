@@ -20,8 +20,8 @@ If the answer is yes at every price level, the market is **calibrated**: its pri
 
 1. **The crowd is well calibrated.** On average, prices were only **1.2, 1.9 and 2.0 percentage points** away from what actually happened, 1, 7 and 30 days before the market closed (on the 3,513 markets with all three; 95% intervals [0.9, 2.1], [1.5, 3.0] and [1.4, 3.2]).
 2. **Prices get sharper as the deadline approaches.** On the same markets, the Brier score (lower is better) falls from **0.089** at 30 days to **0.067** at 7 days to **0.046** at 1 day.
-3. **Overall, prices are a little too extreme.** The *calibration slope*, fitted on prices between 5% and 95%, is **0.74** [0.68, 0.79] one day before close, **0.72** [0.66, 0.80] at 7 days and **0.82** [0.71, 0.93] at 30 days. A slope of 1 would mean honest prices; below 1 means things happen closer to 50% than priced. For example, outcomes priced 10–20% one day before close happened **25.1%** of the time against an average price of **14.9%** (534 markets). This is the opposite of the well-known *favorite–longshot bias*, where long shots are usually overpriced.
-4. **Close to the end, the bias comes mostly from shorter markets.** On long-running markets it is clear only 30 days out (0.82 [0.70, 0.93]); at 1 and 7 days the intervals include 1. That points at markets open only days or weeks, like sports games: the next thing to test.
+3. **Overall, prices are a little too extreme.** On all markets with a price at each horizon (10,765 at 1 day, 6,662 at 7 days, 3,515 at 30 days), the *calibration slope*, fitted on prices between 5% and 95%, is **0.74** [0.68, 0.79] one day before close, **0.72** [0.66, 0.80] at 7 days and **0.82** [0.71, 0.93] at 30 days. A slope of 1 would mean honest prices; below 1 means things happen closer to 50% than priced. For example, across all markets, outcomes priced 10–20% one day before close happened **25.1%** of the time against an average price of **14.9%** (534 markets). This is the opposite of the well-known *favorite–longshot bias*, where long shots are usually overpriced.
+4. **Close to the end, the bias comes mostly from shorter markets.** On the 3,513 long-running markets with all three horizons it is clear only 30 days out (0.82 [0.70, 0.93]); at 1 and 7 days the intervals include 1 (0.97 [0.80, 1.17] and 0.90 [0.78, 1.04]), so at those horizons the "too extreme" finding rests on the all-markets sample. That points at markets open only days or weeks, like sports games: the next thing to test.
 5. **The intervals account for related markets.** Markets in one event (e.g. candidates in an election) share an outcome, so all intervals come from an [event-level bootstrap](src/analysis/bootstrap.py) that resamples whole events. It widens them only slightly, and no conclusion changes.
 
 The full analysis, with the robustness checks and caveats, is in [`notebooks/calibration.ipynb`](notebooks/calibration.ipynb).
@@ -40,10 +40,11 @@ Buy one **YES contract** when it trades between **20 and 30 cents** (*Group A*),
 2. **First test: the 100 most recent trades.** Group A returned **84%** on the capital invested (28 trades) and Group B **13%** (72 trades). Numbers this good from so few trades usually mean luck, so the next step was more data.
 3. **Full history: 992 trades since 2024.** Group A fell to **48%** (372 trades). Group B fell to **2%**, with a range that includes zero: no reliable edge. From here on the research focused on Group A.
 4. **Found and removed a hidden bias.** The entry was timed "7 days before the market *closed*". But many markets close early *because* the event happened, which a trader cannot know in advance. That is a **look-ahead bias**, and it showed: markets that ended early carried a **+19-point** edge, markets that ended on schedule only **+3**. I re-timed every entry to **7 days before the scheduled end date**, which is known in advance, and only counted markets still trading at that moment. Group A: **33%** (390 trades). Group B: **−3%**.
-5. **Stress tests for Group A, with the rules written down before looking at the results.** Every check was run separately on an **earlier period** (before July 2026) and a **later period** kept aside for confirmation:
+5. **Stress tests for Group A, with the rules written down before looking at the results.** Every check was run separately on an **earlier period** (markets that closed before July 2026) and a **later period** (from July 2026):
    - **Not just sports:** single games and matches returned **29%**, all other markets (politics, crypto, economics) **45%**.
    - **Liquidity:** stronger in thinner markets (**41%**) than in busier ones (**25%**, with a range that includes zero). This is a warning sign, because thin markets usually cost more to trade.
    - **Entry timing:** in the earlier period the return was about **24–26%** whether the contract was bought 3, 7 or 14 days before the scheduled end. A real effect shouldn't depend on one exact day.
+   - **Not an untouched hold-out:** the later period is a separate split, but the 20–30 cent band was chosen from the calibration chart of the full history, which includes those markets, and the full-history results above already covered them. The only out-of-sample evidence is the [forward test](#forward-test-real-buying-prices) below.
 6. **Measured the uncertainty honestly.** Several markets can hinge on the same event, so the uncertainty was estimated by resampling whole events, not individual trades. Group A's 95% range is **15% to 52%**: wide, but above zero.
 
 ### From inputs to result
@@ -54,7 +55,7 @@ Buy one **YES contract** when it trades between **20 and 30 cents** (*Group A*),
 | Kept after cleaning (clear final result, open at least a day) | 10,839, backed by 3.1 million price observations |
 | With a usable price 7 days before the *scheduled* end, still trading at that moment | 5,952 |
 | Priced 20–30 cents at that moment (Group A) | **390 trades** from 356 separate events, settling July 2024 – October 2026 |
-| …of which in the earlier period / the later check period | 320 / 70 |
+| …of which in the earlier period / the later period | 320 / 70 |
 
 ### Result (Group A, one contract per trade)
 
@@ -68,11 +69,28 @@ Buy one **YES contract** when it trades between **20 and 30 cents** (*Group A*),
 
 ### What this means, and what it doesn't
 
-- **A consistent historical pattern:** long shots priced at 20–30 cents settled YES more often than their price implied. It held across market types, entry days and both time periods.
+- **A consistent historical pattern:** long shots priced at 20–30 cents settled YES more often than their recorded price implied. It held across market types, entry days and both periods of the history.
 - **Not a proven strategy.** The returns use recorded prices, not prices you could actually have bought at. A real buyer pays the asking price, which can be several cents higher, especially in the thin markets where the pattern was strongest. The 20–30 cent band was also chosen after looking at this history, and Polymarket can change a market's scheduled end date while it trades.
-- **The next step before risking money:** historical **order-book data** (bid and ask prices, and how many contracts were available) for Group A trades in busier markets, to see whether the edge survives realistic buying costs.
+- **With real buying prices, it hasn't shown up so far.** Historical order-book data isn't available, so a forward test now records the asking price of new Group A contracts as they come up. Its first settled positions lost money at that price, but they are far too few for a verdict (below).
 
 The full studies, with every table, are in [`docs/combined_yes_strategy.md`](docs/combined_yes_strategy.md) and [`docs/group_a_deep_dive.md`](docs/group_a_deep_dive.md).
+
+### Forward test: real buying prices
+
+The only way to test the trade at prices a buyer could actually have paid is to record them from now on. Since 2026-10-22 a [forward test](docs/forward_test_spec.md) has done that. It is the only evidence recorded with real order-book quotes, and the only test on markets that played no part in choosing the 20–30 cent band. It uses paper trades only: it reads public market data, and has no account and places no orders.
+
+The rules were fixed on 2026-10-21, before any data was collected. A market is entered at the first collector run once its scheduled end is 7 days or less away (within a day of that mark), if it has at least $100,000 traded at that moment, and it is a Group A position if its **best ask** (the price a buyer actually pays) is in [0.20, 0.30). One contract is held until the market officially settles. The verdict comes after 100 settled positions: the test supports the historical finding only if the return at the best ask is positive *and* the lower end of its 95% range is above zero.
+
+Status as of 2026-11-07 ([full results](docs/election_2026_forward_test_results.md), and the **Forward Test — Election 2026** page of the [live dashboard](https://polymarket-calibration.streamlit.app)):
+
+| | |
+|---|---|
+| Verdict | **Pending:** 17 of the 100 settled positions it needs |
+| Positions recorded | 20, in 20 separate events (17 settled, 3 unresolved) |
+| Settled positions that won | **2 of 17** (11.8%), at an average entry ask of 0.245 |
+| Return at the best ask, one contract each, before fees | **−51.9%** (95% range: −100.0% to 22.9%) |
+
+So far this points against the historical finding. Historically, Group A contracts won 33.3% of the time; if that were the true rate, 2 or fewer wins in 17 independent positions would happen with probability 0.044. It is still provisional: the sample is small, the range is wide, and 10 of the 20 positions are election markets entered in one run on 2026-10-28, whose outcomes are related. The numbers will change as more positions settle.
 
 ## How it works
 
@@ -129,7 +147,7 @@ Two design decisions matter here:
 - **The real close time, not the deadline.** Many markets resolve before their deadline (a question like "…by the end of 2027?" can be settled long before then), so horizons are measured from when the market actually closed.
 - **Fair comparisons between horizons.** The 1-day group naturally contains thousands of short markets, like sports games, that weren't open 30 days earlier. Horizons are therefore compared on the same set of markets.
 - **Short markets are excluded.** Markets open for less than a day are easier to move with a single large trade, and they have no meaningful 1-day horizon.
-- **Uncertainty that respects related markets.** Standard confidence intervals assume every market is independent, but markets in one event share an outcome. The [event-level bootstrap](src/analysis/bootstrap.py) resamples whole events instead. The calibration slope is fitted only on prices between 5% and 95%, because in testing, how near-certain prices were squashed at the edge of the scale moved the slope from 0.97 to 1.21.
+- **Uncertainty that respects related markets.** Standard confidence intervals assume every market is independent, but markets in one event share an outcome. The [event-level bootstrap](src/analysis/bootstrap.py) resamples whole events instead. The calibration slope is fitted only on prices between 5% and 95%, because in testing, how near-certain prices were squashed at the edge of the scale moved the slope on long-running markets from 0.97 to 1.21.
 
 ## Tech stack
 
@@ -165,22 +183,30 @@ To explore the analysis, open `notebooks/calibration.ipynb` in VS Code or Jupyte
 pytest
 ```
 
-98 tests cover the API retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, snapshot completeness and retries, the incremental pipeline, the database upserts, the calibration math, the event-level bootstrap (checked against simulated data with a known answer), the freshness rule and the dashboard itself. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database. The dashboard tests run the real Streamlit app against a small synthetic dataset, so they check exact numbers and need no real data.
+The tests cover the API retry logic, pagination, normalization, the snapshot rule (including a check that it never uses a future price), the data quality checks, snapshot completeness and retries, the incremental pipeline, the database upserts, the calibration math, the event-level bootstrap (checked against simulated data with a known answer), the freshness rule, the long-shot studies, the forward test (its rules, the collector, storage, the workflow schedules and the results report) and the dashboard itself, including the forward-test page. All HTTP calls are mocked. Database tests run in a throwaway schema of `TEST_DATABASE_URL` (the local Docker database by default), never the live database. The dashboard tests run the real Streamlit app against a small synthetic dataset, so they check exact numbers and need no real data.
 
 [GitHub Actions](.github/workflows/tests.yml) runs every test on each push and pull request, and again before every daily update. There, a missing database makes the run fail instead of skipping the database tests, so a green badge means every test actually ran.
 
 ## Project structure
 
 ```
-src/extract/      API clients: raw downloads only
-src/transform/    normalize.py, snapshots.py, schemas.py (pandera)
-src/load/         postgres.py: upserts and pipeline_runs logging
-src/analysis/     calibration.py: the calibration math and chart
-sql/schema.sql    tables: markets, price_history, snapshots, pipeline_runs
-notebooks/        the analysis write-up
-app/              Streamlit dashboard
-tests/            pytest
-data/raw/         cached API responses (git-ignored)
+src/extract/        polymarket.py: API client and retry helper, raw downloads only
+src/transform/      normalize.py, snapshots.py, schemas.py (pandera), quality.py, completeness.py
+src/load/           postgres.py: upserts and pipeline_runs logging; secure_online_database.py: lockdown
+src/pipeline.py     the daily incremental update
+src/analysis/       calibration.py, bootstrap.py: the calibration math, chart and event-level bootstrap
+                    combined_yes_strategy.py, group_a_deep_dive.py: the long-shot studies
+                    forward_test_results.py, forward_test_report.py: forward-test audit and results
+src/forward_test/   the forward-test collector (python -m forward_test): rules, order books, storage
+sql/                schema.sql (markets, price_history, snapshots, processing_status, pipeline_runs),
+                    forward_test.sql, migrations/, supabase_security.sql
+notebooks/          the calibration analysis write-up
+app/                dashboard.py (Streamlit) and pages/forward_test_election_2026.py
+docs/               the research write-ups, the forward-test spec, manual and results
+docs/data/          the published forward-test results bundle the dashboard page reads
+.github/workflows/  pipeline.yml (daily update), tests.yml, forward_test.yml (forward-test collector)
+tests/              pytest
+data/raw/           cached API responses (git-ignored)
 ```
 
 ## Limitations
@@ -189,9 +215,11 @@ data/raw/         cached API responses (git-ignored)
 - Markets within the same event (for example many candidates in one election) are related, so the true uncertainty is somewhat wider than the confidence bars show.
 - "Happened" refers to the first listed outcome of each market (for example "Yes").
 - Prices are not trades: a real trader would also pay the bid–ask spread and fees.
-- Polymarket leaves most markets without a category, so the results can't yet be split by topic, such as sports vs politics.
+- Polymarket leaves most markets without a category. The long-shot study splits single games and matches from all other markets with a rule based on question wording ([`docs/group_a_deep_dive.md`](docs/group_a_deep_dive.md)), but the calibration results are not split by topic yet, and there is no finer split such as politics vs crypto.
+- The historical studies and the forward test pick markets differently. The history keeps markets whose final total volume reached $1M, which is known only after a market resolves; the forward test enters markets with at least $100,000 traded at the moment of entry, so it can include markets that never reach $1M.
 
 ## What's next
 
-- Split the results by topic (e.g. sports vs politics), to test whether the bias in findings 3 and 4 comes from short sports markets.
+- Apply the sports vs other split to the calibration results, to test whether the bias in findings 3 and 4 comes from short sports markets. So far only the long-shot study uses it, and a finer split by topic (e.g. politics vs crypto) is still missing.
+- Keep the forward test running unchanged until 100 positions settle, then apply its decision rule.
 - Add [Kalshi](https://kalshi.com) as a second platform. The pipeline is built so that only the extract and normalize steps are platform-specific.

@@ -472,7 +472,8 @@ def build_report(latest, earlier, source, generated_at, all_markets=None, look_a
         f"- **Equal-dollar scenario:** ${STAKE:.0f} per market, buying ${STAKE:.0f} ÷ (price + costs) shares; "
         "ROI = total profit ÷ total invested. Cheap contracts get more shares, so the two scenarios weigh trades "
         "differently and are reported separately.\n"
-        "- The intervals were fixed before looking at these results and are not tuned afterwards.",
+        "- The two intervals were taken from the 7-day calibration chart of the full history, which includes these "
+        "markets (section 10). They were not tuned after the returns below were computed.",
         "## 3. Selection methodology\n\n"
         f"- Markets with a usable **{HORIZON_DAYS}-day snapshot** (the latest price at or before 7 days before close, at "
         "most 1 day old, as defined by the project's snapshot rule) and a binary final outcome.\n"

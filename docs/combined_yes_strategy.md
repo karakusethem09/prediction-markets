@@ -42,7 +42,7 @@ The 7-day calibration chart suggests that markets priced **20–30%** and **50�
 - Buy YES at the 7-day snapshot price and hold until the market resolves.
 - **One-share scenario:** exactly one share per market; profit = payout − price − costs; ROI = total profit ÷ total paid (aggregated over all shares, not an average of per-trade ROIs).
 - **Equal-dollar scenario:** $1 per market, buying $1 ÷ (price + costs) shares; ROI = total profit ÷ total invested. Cheap contracts get more shares, so the two scenarios weigh trades differently and are reported separately.
-- The intervals were fixed before looking at these results and are not tuned afterwards.
+- The two intervals were taken from the 7-day calibration chart of the full history, which includes these markets (section 10). They were not tuned after the returns below were computed.
 
 ## 3. Selection methodology
 

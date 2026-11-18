@@ -398,6 +398,9 @@ def results_markdown(results):
           if election > 1 else []),
         "- **Executable prices:** the forward test pays the best ask; the historical study used recorded prices, which "
         "sit closer to the midpoint.",
+        "- **Universe:** the historical study kept markets whose final total volume reached $1M, which is known only "
+        f"after they resolve; the forward test enters markets with at least ${MIN_ENTRY_VOLUME:,} traded at the moment "
+        "of entry, so it can include markets that never reach $1M.",
         "- **Selection:** the 20–30 cent range was chosen after looking at the historical data, so part of its "
         "historical edge may be selection luck.",
         "",

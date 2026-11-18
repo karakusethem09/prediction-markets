@@ -26,7 +26,7 @@ Fixed before computing any result in this report:
 | 1. Sports | **Single game or match** if the question contains `vs`, `win on <date>`, a point spread like `(-1.5)`, or `O/U`; otherwise **other** (politics, crypto, "by date" events, season-long sports futures). The rule was written from question wording only, without looking at prices or outcomes. |
 | 2. Liquidity | Total traded volume, split at the **median** of the Group A markets into lower and higher volume. Volume is the market's final total, not the volume available at entry. |
 | 3. Timing | The same rules with entry 3, 7, 14 days before the scheduled end. A real effect should look similar at nearby entry times. |
-| Hold-out | **Exploration:** markets that closed before 2026-07-01. **Test:** closed on or after it. Each result is shown for both, and for all markets together. |
+| Time split | **Exploration:** markets that closed before 2026-07-01. **Test:** closed on or after it. Each result is shown for both, and for all markets together. |
 | Uncertainty | 95% intervals from an event-level bootstrap (5,000 resamples of whole events). ROI is also shown with +$0.02 per share of illustrative costs. |
 
 ## 1. Is it a sports effect?

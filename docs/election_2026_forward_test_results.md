@@ -122,6 +122,7 @@ Defined after seeing the data, from tiny samples. They describe where the result
 - **Sample size:** 17 settled positions against 390. A single win more or fewer moves the win rate by 5.9 points.
 - **Related outcomes:** 10 are election markets, entered in 1 run(s) (2026-10-28). Races decided on the same election day are not independent of each other, even across different events (e.g. a national swing affects every governor race).
 - **Executable prices:** the forward test pays the best ask; the historical study used recorded prices, which sit closer to the midpoint.
+- **Universe:** the historical study kept markets whose final total volume reached $1M, which is known only after they resolve; the forward test enters markets with at least $100,000 traded at the moment of entry, so it can include markets that never reach $1M.
 - **Selection:** the 20–30 cent range was chosen after looking at the historical data, so part of its historical edge may be selection luck.
 
 ## Limitations
